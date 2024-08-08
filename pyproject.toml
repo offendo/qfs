@@ -1,0 +1,29 @@
+[project]
+name = "rlmath-pt"
+version = "0.1.0"
+description = "RL math"
+authors = [
+    { name = "Nilay Patel", email = "nilaypatel2@gmail.com" }
+]
+dependencies = [
+    "torch>=2.4.0",
+    "torchrl>=0.5.0",
+    "tensordict>=0.5.0",
+    "tqdm>=4.66.5",
+]
+readme = "README.md"
+requires-python = ">= 3.8"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.rye]
+managed = true
+dev-dependencies = []
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rlmath_pt"]
