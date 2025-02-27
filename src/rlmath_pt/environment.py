@@ -4,18 +4,18 @@ from typing import Optional
 
 import numpy as np
 import torch
+from torchrl.data.tensor_specs import BoundedDiscrete
 import tqdm
+from icecream import ic
 from tensordict import TensorDict, TensorDictBase
 from tensordict.nn import TensorDictModule
 from torch import nn
 
 from torchrl.data import (
-    BinaryDiscreteTensorSpec,
-    BoundedTensorSpec,
-    CompositeSpec,
-    DiscreteTensorSpec,
-    MultiOneHotDiscreteTensorSpec,
-    UnboundedContinuousTensorSpec,
+    Binary,
+    Composite,
+    Bounded,
+    UnboundedContinuous,
 )
 from torchrl.envs import (
     CatTensors,
@@ -29,7 +29,7 @@ from torchrl.envs.utils import check_env_specs, step_mdp
 from rlmath_pt.utils import (
     compute_num_monomials,
     compute_reward,
-    compute_height,
+    compute_batch_height,
     compute_max_height,
 )
 
@@ -46,56 +46,72 @@ class PolynomialPredictionEnv(EnvBase):
         self.d = d
         self.n = n
         self.n_monomials = compute_num_monomials(p, d, n)
-        self.max_height = compute_max_height(p, d, n)
+        self.max_height = compute_max_height(n, d)
 
-        self.observation_spec = CompositeSpec(
-            height=BoundedTensorSpec(
-                low=1,
-                high=self.max_height,
-                shape=torch.Size(),
-                dtype=torch.float32,
-                device=self.device,
-            ),
-            polynomial=BinaryDiscreteTensorSpec(
-                n=self.n_monomials,
-                shape=torch.Size([self.n_monomials]),
-                dtype=torch.long,
-                device=self.device,
-            ),
+        self.observation_spec = Composite(
+            dict(
+                height=Bounded(  # type:ignore
+                    low=1,
+                    high=self.max_height,
+                    shape=torch.Size([1]),
+                    dtype=torch.float32,
+                    device=self.device,
+                    domain="discrete",
+                ),
+                polynomial=Binary(
+                    shape=torch.Size([self.n_monomials]),
+                    dtype=torch.long,
+                    device=self.device,
+                ),
+            )
         )
 
-        self.action_spec = BoundedTensorSpec(
+        self.action_spec = Bounded(  # type:ignore
             low=0,
             high=1,
             shape=torch.Size([self.n_monomials]),
             dtype=torch.float32,
             device=self.device,
         )
-        self.reward_spec = UnboundedContinuousTensorSpec(shape=torch.Size([1]), dtype=torch.float32, device=self.device)
+
+        self.reward_spec = UnboundedContinuous(  # type:ignore
+            shape=torch.Size([1]),
+            dtype=torch.float32,
+            device=self.device,
+        )
 
     def _reset(self, tensordict: TensorDict, **kwargs):
-        random_poly = torch.randint(0, 2, size=(self.n_monomials,), device=self.device, dtype=torch.float32)
+        random_poly = torch.randint(
+            0,
+            2,
+            size=(self.n_monomials,),
+            device=self.device,
+            dtype=torch.int,
+        )
         observation = TensorDict(
             {
-                "polynomial": random_poly.long(),
-                "height": compute_height(random_poly),
+                "polynomial": random_poly,
+                "height": compute_batch_height(random_poly, self.n, self.d, self.p),
             },
             batch_size=self.batch_size,
         )
 
         return observation
 
-    @staticmethod
-    def _step(tensordict: TensorDict):
+    def _step(self, tensordict: TensorDict):
         # Previous state
-        guess = tensordict["action"]
+        logits = tensordict["logits"]
         prev_height = tensordict["height"]
 
         # New state
-        new_polynomial = (torch.sigmoid(guess) > 0.5).long()
-        new_height = compute_height(guess)
-        reward = compute_reward(prev_height, new_polynomial)
-        done = torch.zeros_like(reward, dtype=torch.bool)
+        new_polynomial = (torch.sigmoid(logits.squeeze(-1)) > 0.5).int()
+
+        # Reminder: Transpose to put batch dim first (N, B) --> (B, N)
+        new_height = compute_batch_height(new_polynomial, n=self.n, d=self.d, p=self.p)
+        reward = compute_reward(prev_height, new_height, n=self.n, d=self.d)
+
+        # We're done if the policy generated a polynomial of max height
+        done = new_height >= self.max_height
 
         out = TensorDict(
             {
@@ -104,7 +120,7 @@ class PolynomialPredictionEnv(EnvBase):
                 "reward": reward,
                 "done": done,
             },
-            tensordict.shape,
+            batch_size=self.batch_size,
         )
         return out
 

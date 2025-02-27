@@ -2,8 +2,10 @@
 
 from dataclasses import dataclass
 
+from tensordict.nn import NormalParamExtractor
 import torch
 import torch.nn as nn
+from icecream import ic
 
 
 @dataclass
@@ -62,9 +64,10 @@ class PolynomialTransformer(nn.Module):
     # polynomials are non-autoregressive. Instead, we can just output a single vector and threshold the
     # logits to determine which monomials are present in the output. This is contingent on using the
     # "each coefficient means different monomial" strategy.
-    def __init__(self, config: PolynomialModelConfig):
+    def __init__(self, config: PolynomialModelConfig, value_model: bool = False):
         super().__init__()
         self.config = config
+        self.is_value_model = value_model
 
         # If we're using the input height, make sure we add one to the vocab size
         self.embedding = nn.Embedding(
@@ -85,17 +88,31 @@ class PolynomialTransformer(nn.Module):
             batch_first=True,
         )
         self.encoder = nn.TransformerEncoder(layer, num_layers=config.n_layers)
+        self.extractor = NormalParamExtractor()
 
-        # Output layer
-        self.monomial_head = nn.Linear(config.d_model, config.n_monomials)
+        # Output layer - because we're using PPO, we output 2 values (loc, scale)
+        if self.is_value_model:
+            self.head = nn.Linear(config.d_model, 1)
+        else:
+            self.head = nn.Linear(config.d_model, 2)
 
-    def forward(self, polynomial: torch.LongTensor, height: torch.LongTensor | None = None):
+    def forward(
+        self,
+        polynomial: torch.LongTensor,
+        height: torch.LongTensor | None = None,
+        *args,
+        **kwargs,
+    ):
         # Embed -> encode -> project
-        polynomial = self.embedding(polynomial)  # B, N, D
-        polynomial = self.encoder(polynomial)  # B, N, D
-        logits = self.monomial_head(polynomial)  # B, N, V
+        x = self.embedding(polynomial)  # B, N, D
+        x = self.encoder(x)  # B, N, D
 
-        # Pool -> sigmoid -> threshhold
-        # preds = torch.sigmoid(self.pooler(logits, dim=1)) > self.config.threshhold
+        logits = self.head(x)  # B, N, V
 
-        return torch.mean(logits, dim=-1)
+        # If this is a value model, then just return a scalar for predicted value
+        if self.is_value_model:
+            return torch.mean(logits, dim=1)
+
+        # If this is a policy, then return the logits so we can sample the predictions
+        params = self.extractor(torch.mean(logits, dim=1))
+        return params, logits
