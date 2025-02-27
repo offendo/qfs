@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from rlmath_pt.model import PolynomialTransformer, PolynomialModelConfig, PolynomialOutput
+from rlmath.model import PolynomialTransformer, PolynomialModelConfig, PolynomialOutput
 from tensordict.nn import TensorDictModule
 
 

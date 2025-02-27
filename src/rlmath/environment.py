@@ -26,7 +26,7 @@ from torchrl.envs import (
 )
 from torchrl.envs.transforms.transforms import _apply_to_composite
 from torchrl.envs.utils import check_env_specs, step_mdp
-from rlmath_pt.utils import (
+from rlmath.utils import (
     compute_num_monomials,
     compute_reward,
     compute_batch_height,

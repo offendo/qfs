@@ -10,7 +10,7 @@ os.environ["PYTHON_JULIACALL_HANDLE_SIGNALS"] = "yes"
 from juliacall import Main as jl
 
 jl.seval("using Qfs;")
-from rlmath_pt.utils import get_exponent_vector, compute_max_height
+from rlmath.utils import get_exponent_vector, compute_max_height
 import torch
 import logging
 

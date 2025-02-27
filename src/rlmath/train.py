@@ -24,13 +24,13 @@ from torchrl.objectives.ppo import GAE
 from tqdm import tqdm
 from icecream import ic
 
-from rlmath_pt.environment import PolynomialPredictionEnv
-from rlmath_pt.model import (
+from rlmath.environment import PolynomialPredictionEnv
+from rlmath.model import (
     PolynomialModelConfig,
     PolynomialOutput,
     PolynomialTransformer,
 )
-from rlmath_pt.utils import compute_batch_height, compute_num_monomials, compute_reward
+from rlmath.utils import compute_batch_height, compute_num_monomials, compute_reward
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 

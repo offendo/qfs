@@ -1,7 +1,7 @@
 import logging
 import os
 import numpy as np
-from rlmath_pt.utils import compute_polynomial_height, compute_max_height
+from rlmath.utils import compute_polynomial_height, compute_max_height
 
 class Poly:
     def __init__(
