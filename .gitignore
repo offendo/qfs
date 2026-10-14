@@ -8,3 +8,7 @@ wheels/
 
 # venv
 .venv
+
+# runs
+runs/
+.DS_Store

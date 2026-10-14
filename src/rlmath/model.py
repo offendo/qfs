@@ -1,118 +1,125 @@
-#!/usr/bin/env python3
+"""Masked-coefficient transformer.
+
+The model sees a polynomial as one token per monomial. Each token is the monomial's coefficient
+(an element of F_p, or [MASK]) plus an embedding of which monomial it is. A height token in front
+says what height the polynomial has (in training) or should have (when generating).
+
+Trained like BERT/MaskGIT: hide a random subset of the coefficients of a good polynomial and
+predict them. Used two ways:
+  - edit: take a good polynomial, mask k coefficients, fill them in  (the "f -> f'" move)
+  - generate: mask everything and fill it in over several steps
+"""
 
 from dataclasses import dataclass
+import math
 
-from tensordict.nn import NormalParamExtractor
 import torch
 import torch.nn as nn
-from icecream import ic
+import torch.nn.functional as F
+
+from rlmath.polynomials import monomials
 
 
 @dataclass
-class PolynomialModelConfig:
-    n_monomials: int
-    use_input_height: bool
-    d_model: int = 512
-    d_hidden: int = 2048
-    n_layers: int = 6
-    n_heads: int = 8
+class ModelConfig:
+    p: int
+    n: int
+    d: int
+    max_height: int = 12  # largest height token; scores above this are clipped
+    d_model: int = 128
+    n_layers: int = 4
+    n_heads: int = 4
+    d_ff: int = 512
     dropout: float = 0.1
-    threshhold: float = 0.5
 
 
-class PolynomialOutput:
-    logits: torch.FloatTensor | None
-    predictions: torch.LongTensor | None
-
-    def __init__(self, logits=None, predictions=None):
-        self.logits = logits
-        self.predictions = predictions
-
-    def __repr__(self):
-        return f"""PolynomialOutput(logits={self.logits}, predictions={self.predictions})"""
-
-    def __getitem__(self, q):
-        if isinstance(q, int):
-            if q == 0:
-                return self.logits
-            elif q == 1:
-                return self.predictions
-            else:
-                raise IndexError(f"No such index {q}")
-        elif isinstance(q, str):
-            if q == "logits":
-                return self.logits
-            elif q == "predictions":
-                return self.predictions
-            else:
-                raise KeyError(f"No such key {q}")
-
-
-class PolynomialTransformer(nn.Module):
-    """Model designed to generate a polynomial with some qFs height `h > h_0` by transforming a monomial sequence into another."""
-
-    # Input representation:
-    # Each monomial is a possible token in the vocabulary. Then, our polynomial is a bag of words (sequence of monomials).
-    # How do we handle coefficients?
-    # - One possibility is to just treat 1x^n as a completely different monomial as 2x^n, etc. This is
-    #   very easy to represent, but may remove some information as we know the two are linked in some way.
-    # - Another possiiblity is to treat 2x^n as twice the vector of 1x^n. This causes some problems
-    #   though, since we're not actually dealing with the integers 1 and 2, but rather the elements 1
-    #   and 2 of the finite field. Who knows is this actually matters?
-    # Output representation:
-    # We want to output a polynomial. We could use a decoder, but this is slow and unnecessary since
-    # polynomials are non-autoregressive. Instead, we can just output a single vector and threshold the
-    # logits to determine which monomials are present in the output. This is contingent on using the
-    # "each coefficient means different monomial" strategy.
-    def __init__(self, config: PolynomialModelConfig, value_model: bool = False):
+class MaskedPolyTransformer(nn.Module):
+    def __init__(self, cfg: ModelConfig):
         super().__init__()
-        self.config = config
-        self.is_value_model = value_model
+        self.cfg = cfg
+        self.mask_id = cfg.p  # coefficient vocabulary is 0..p-1, plus [MASK]
+        self.null_height = 0  # height token 0 = "unconditional"
 
-        # If we're using the input height, make sure we add one to the vocab size
-        self.embedding = nn.Embedding(
-            config.n_monomials + config.use_input_height,
-            config.d_model,
-        )
+        self.coeff_emb = nn.Embedding(cfg.p + 1, cfg.d_model)
+        # One embedding table per variable, indexed by exponent. A monomial's embedding is the sum
+        # over its variables, so permuting variables permutes the inputs in a consistent way.
+        self.exp_emb = nn.ModuleList(nn.Embedding(cfg.d + 1, cfg.d_model) for _ in range(cfg.n))
+        self.height_emb = nn.Embedding(cfg.max_height + 1, cfg.d_model)
+        self.register_buffer("exponents", torch.as_tensor(monomials(cfg.n, cfg.d)), persistent=False)
 
-        # Pool the output using average
-        self.pooler = torch.mean
-
-        # Transformer encoder
         layer = nn.TransformerEncoderLayer(
-            d_model=config.d_model,
-            nhead=config.n_heads,
-            dim_feedforward=config.d_hidden,
-            dropout=config.dropout,
-            norm_first=True,
+            d_model=cfg.d_model,
+            nhead=cfg.n_heads,
+            dim_feedforward=cfg.d_ff,
+            dropout=cfg.dropout,
+            activation="gelu",
             batch_first=True,
+            norm_first=True,
         )
-        self.encoder = nn.TransformerEncoder(layer, num_layers=config.n_layers)
-        self.extractor = NormalParamExtractor()
+        self.encoder = nn.TransformerEncoder(layer, cfg.n_layers, enable_nested_tensor=False)
+        self.norm = nn.LayerNorm(cfg.d_model)
+        self.head = nn.Linear(cfg.d_model, cfg.p)
 
-        # Output layer - because we're using PPO, we output 2 values (loc, scale)
-        if self.is_value_model:
-            self.head = nn.Linear(config.d_model, 1)
-        else:
-            self.head = nn.Linear(config.d_model, 2)
+    @property
+    def n_monomials(self) -> int:
+        return self.exponents.shape[0]
 
-    def forward(
+    def forward(self, coeffs: torch.Tensor, height: torch.Tensor) -> torch.Tensor:
+        """coeffs: (B, M) in 0..p (p = [MASK]); height: (B,) in 0..max_height. Returns logits (B, M, p)."""
+        mono = sum(emb(self.exponents[:, j]) for j, emb in enumerate(self.exp_emb))  # (M, D)
+        x = self.coeff_emb(coeffs) + mono
+        h = self.height_emb(height.clamp(0, self.cfg.max_height)).unsqueeze(1)  # (B, 1, D)
+        x = self.encoder(torch.cat([h, x], dim=1))
+        return self.head(self.norm(x[:, 1:]))
+
+    def loss(self, coeffs: torch.Tensor, height: torch.Tensor, cond_dropout: float = 0.1) -> torch.Tensor:
+        """MaskGIT objective: mask a random fraction (cosine schedule) of each row, predict it."""
+        B, M = coeffs.shape
+        r = torch.rand(B, device=coeffs.device)
+        n_mask = (torch.cos(r * math.pi / 2) * M).ceil().clamp(1, M)  # at least one masked
+        scores = torch.rand(B, M, device=coeffs.device)
+        ranks = scores.argsort(dim=1).argsort(dim=1)
+        masked = ranks < n_mask.unsqueeze(1)
+        inputs = coeffs.masked_fill(masked, self.mask_id)
+        # Sometimes hide the height so the model can also generate unconditionally.
+        drop = torch.rand(B, device=coeffs.device) < cond_dropout
+        height = height.masked_fill(drop, self.null_height)
+        logits = self(inputs, height)
+        return F.cross_entropy(logits[masked], coeffs[masked])
+
+    @torch.no_grad()
+    def fill(
         self,
-        polynomial: torch.LongTensor,
-        height: torch.LongTensor | None = None,
-        *args,
-        **kwargs,
-    ):
-        # Embed -> encode -> project
-        x = self.embedding(polynomial)  # B, N, D
-        x = self.encoder(x)  # B, N, D
+        coeffs: torch.Tensor,
+        masked: torch.Tensor,
+        height: torch.Tensor,
+        temperature: float = 1.0,
+        steps: int = 8,
+    ) -> torch.Tensor:
+        """Fill the masked positions of each row by iterative MaskGIT decoding.
 
-        logits = self.head(x)  # B, N, V
-
-        # If this is a value model, then just return a scalar for predicted value
-        if self.is_value_model:
-            return torch.mean(logits, dim=1)
-
-        # If this is a policy, then return the logits so we can sample the predictions
-        params = self.extractor(torch.mean(logits, dim=1))
-        return params, logits
+        At each step, sample every still-masked position, keep the most confident samples, and
+        re-mask the rest; the number left masked follows a cosine schedule down to zero.
+        """
+        coeffs = coeffs.clone()
+        masked = masked.clone()
+        coeffs[masked] = self.mask_id
+        total = masked.sum(dim=1)
+        for step in range(steps):
+            if not masked.any():
+                break
+            logits = self(coeffs, height) / max(temperature, 1e-6)
+            probs = logits.softmax(-1)
+            sample = torch.distributions.Categorical(probs=probs).sample()  # (B, M)
+            conf = probs.gather(-1, sample.unsqueeze(-1)).squeeze(-1)
+            conf = conf.masked_fill(~masked, -1.0)
+            # how many should still be masked after this step
+            frac = math.cos(math.pi / 2 * (step + 1) / steps)
+            keep_masked = (total.float() * frac).floor().long()
+            n_reveal = (masked.sum(dim=1) - keep_masked).clamp(min=1)
+            order = conf.argsort(dim=1, descending=True)
+            rank = order.argsort(dim=1)
+            reveal = masked & (rank < n_reveal.unsqueeze(1))
+            coeffs[reveal] = sample[reveal]
+            masked &= ~reveal
+        return coeffs
