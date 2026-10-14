@@ -1,3 +1,6 @@
 [submodule "MMPSingularities.jl"]
 	path = MMPSingularities.jl
 	url = git@github.com:jjgarzella/MMPSingularities.jl.git
+[submodule "Qfs"]
+	path = Qfs
+	url = ./Qfs
