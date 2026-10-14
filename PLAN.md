@@ -1,7 +1,9 @@
 # Plan: searching for high-height Calabi–Yau polynomials with learning
 
-Status: proposal, October 2026. The existing RL code in `src/rlmath/` is treated as disposable; the
-Julia height code in `Qfs/src/Qfs.jl` is kept and reworked.
+Status: implemented on the `fast-height` branch (October 2026); see `README.md` for what was built.
+Where the code differs from this plan: the Julia workers talk over stdin/stdout instead of ZMQ
+(no ports or extra packages), and supersingular polynomials are not rewarded by default, because
+at p = 5 sparse supersingular quartics turned out to be easy to find and flooded the search.
 
 ## 1. The problem in plain terms
 
