@@ -21,6 +21,8 @@ import time
 
 import numpy as np
 import torch
+from tqdm import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 
 from rlmath.model import MaskedPolyTransformer, ModelConfig
 from rlmath.oracle import HeightOracle
@@ -124,6 +126,14 @@ class Trainer:
         )
         self.trained = False
         self.start = time.time()
+        self.bar = None
+
+    def phase(self, name: str):
+        """Show what the current round is doing next to the progress bar."""
+        if self.bar is not None:
+            self.bar.set_postfix_str(f"best {self.pool.best} | {name}", refresh=True)
+            self.bar.n = self.oracle.calls if self.cfg.max_oracle_calls else self.bar.n
+            self.bar.refresh()
 
     # ---- proposals -------------------------------------------------------------------------
 
@@ -204,17 +214,21 @@ class Trainer:
     def run_round(self, round_: int) -> dict:
         cfg = self.cfg
         calls_before = self.oracle.calls
+        self.phase("proposing")
         candidates = self.propose()
+        self.phase(f"scoring {len(candidates)} candidates")
         scores, results = self.scorer(candidates)
         new = self.pool.add(candidates, scores, results, round_)
 
         # Hill-climb from the best of this round's new finds.
         starts = sorted(new, key=lambda e: -e.score)[: cfg.local_search_starts]
-        for e in starts:
+        for i, e in enumerate(starts):
+            self.phase(f"local search {i + 1}/{len(starts)}")
             rows, s, res = local_search(self.scorer, e.coeffs, e.score, cfg.p, cfg.local_search_steps)
             new += self.pool.add(rows, s, res, round_)
 
         self.record(new, round_)
+        self.phase("training model")
         loss = self.train_model() if cfg.use_model else float("nan")
         found = {}
         for e in new:
@@ -235,21 +249,42 @@ class Trainer:
 
     def run(self):
         cfg = self.cfg
+        # Also log to <out>/train.log, so `tail -f` works however the run was started.
+        handler = logging.FileHandler(self.out / "train.log")
+        handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%H:%M:%S"))
+        logging.getLogger("rlmath").addHandler(handler)
         log.info("writing to %s; device %s; %d Julia workers", self.out, self.device, self.oracle.n_workers)
+        # The bar counts oracle calls when there is a budget, else rounds. It turns itself off when
+        # output isn't a terminal (e.g. redirected to a file); log lines are printed either way.
+        by_calls = bool(cfg.max_oracle_calls)
+        self.bar = tqdm(
+            total=cfg.max_oracle_calls if by_calls else cfg.rounds,
+            unit=" calls" if by_calls else " rounds",
+            unit_scale=by_calls,
+            dynamic_ncols=True,
+            disable=None,
+        )
         try:
-            for r in range(cfg.rounds):
-                stats = self.run_round(r)
-                with open(self.out / "log.jsonl", "a") as f:
-                    f.write(json.dumps(stats) + "\n")
-                log.info(
-                    "round %d  calls %d  best %d  new %s  loss %.3f",
-                    r, stats["oracle_calls"], stats["best"], stats["new_by_score"], stats["loss"],
-                )
-                if cfg.use_model and (r + 1) % cfg.checkpoint_every == 0:
-                    torch.save({"config": asdict(cfg), "model": self.model.state_dict()}, self.out / "model.pt")
-                if cfg.max_oracle_calls and self.oracle.calls >= cfg.max_oracle_calls:
-                    break
+            with logging_redirect_tqdm():
+                for r in range(cfg.rounds):
+                    stats = self.run_round(r)
+                    with open(self.out / "log.jsonl", "a") as f:
+                        f.write(json.dumps(stats) + "\n")
+                    if not by_calls:
+                        self.bar.update(1)
+                    self.phase("round done")
+                    rate = stats["oracle_calls"] / max(stats["seconds"], 1e-9)
+                    log.info(
+                        "round %d  %.0fs  calls %d (%.0f/s)  best %d  new %s  pool %s  loss %.3f",
+                        r, stats["seconds"], stats["oracle_calls"], rate, stats["best"],
+                        stats["new_by_score"], stats["pool_by_score"], stats["loss"],
+                    )
+                    if cfg.use_model and (r + 1) % cfg.checkpoint_every == 0:
+                        torch.save({"config": asdict(cfg), "model": self.model.state_dict()}, self.out / "model.pt")
+                    if cfg.max_oracle_calls and self.oracle.calls >= cfg.max_oracle_calls:
+                        break
         finally:
+            self.bar.close()
             self.oracle.close()
             if cfg.use_model:
                 torch.save({"config": asdict(cfg), "model": self.model.state_dict()}, self.out / "model.pt")

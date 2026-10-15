@@ -13,6 +13,8 @@ from pathlib import Path
 import time
 
 import numpy as np
+from tqdm import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 
 from rlmath.oracle import HeightOracle
 from rlmath.polynomials import random_polys, to_string
@@ -47,26 +49,31 @@ def main(argv=None):
         scorer = Scorer(oracle, args.infinite_score, past_cutoff_is_infinite=(args.n == 4 and args.cutoff >= 10))
         pool = ElitePool(args.p, args.n, args.d, per_level=10**9)
         r = 0
-        while oracle.calls < args.max_oracle_calls:
-            polys = random_polys(rng, args.batch, args.p, args.n, args.d)
-            scores, results = scorer(polys)
-            new = pool.add(polys, scores, results, r)
-            with open(out / "elites.jsonl", "a") as f:
-                for e in new:
-                    f.write(json.dumps({
-                        "score": e.score, "status": e.status, "round": r, "oracle_calls": oracle.calls,
-                        "seconds": round(time.time() - start, 1),
-                        "coeffs": e.coeffs.tolist(), "poly": to_string(e.coeffs, args.n, args.d),
-                    }) + "\n")
-            stats = {
-                "round": r, "seconds": round(time.time() - start, 1), "oracle_calls": oracle.calls,
-                "best": pool.best, "pool_by_score": pool.counts(),
-                "score_hist": {int(s): int((scores == s).sum()) for s in np.unique(scores)},
-            }
-            with open(out / "log.jsonl", "a") as f:
-                f.write(json.dumps(stats) + "\n")
-            log.info("batch %d  calls %d  best %d  pool %s", r, oracle.calls, pool.best, pool.counts())
-            r += 1
+        bar = tqdm(total=args.max_oracle_calls, unit=" calls", unit_scale=True, dynamic_ncols=True, disable=None)
+        with logging_redirect_tqdm():
+            while oracle.calls < args.max_oracle_calls:
+                polys = random_polys(rng, args.batch, args.p, args.n, args.d)
+                scores, results = scorer(polys)
+                new = pool.add(polys, scores, results, r)
+                with open(out / "elites.jsonl", "a") as f:
+                    for e in new:
+                        f.write(json.dumps({
+                            "score": e.score, "status": e.status, "round": r, "oracle_calls": oracle.calls,
+                            "seconds": round(time.time() - start, 1),
+                            "coeffs": e.coeffs.tolist(), "poly": to_string(e.coeffs, args.n, args.d),
+                        }) + "\n")
+                stats = {
+                    "round": r, "seconds": round(time.time() - start, 1), "oracle_calls": oracle.calls,
+                    "best": pool.best, "pool_by_score": pool.counts(),
+                    "score_hist": {int(s): int((scores == s).sum()) for s in np.unique(scores)},
+                }
+                with open(out / "log.jsonl", "a") as f:
+                    f.write(json.dumps(stats) + "\n")
+                bar.update(oracle.calls - bar.n)
+                bar.set_postfix_str(f"best {pool.best}")
+                log.info("batch %d  calls %d  best %d  pool %s", r, oracle.calls, pool.best, pool.counts())
+                r += 1
+        bar.close()
 
 
 if __name__ == "__main__":

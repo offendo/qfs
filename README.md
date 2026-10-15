@@ -42,6 +42,13 @@ uv run rlmath-train --p 5 --max-oracle-calls 100000 --no-use-model
 uv run rlmath-baseline --p 5 --max-oracle-calls 100000
 ```
 
+**Watching a run.** In a terminal, a progress bar shows the oracle calls used out of the budget,
+the speed, the time remaining, the best height so far and what the round is doing right now. After
+each round a summary line prints the new finds and the elite pool by height. The same lines go to
+`runs/<name>/train.log`, so `tail -f runs/<name>/train.log` works for a run started in the
+background. `uv run rlmath-summarize runs/<name>` gives the comparison table at any point,
+including mid-run.
+
 Every polynomial whose height is computed, by any run, is also saved to the SQLite file
 `runs/heights.sqlite` (change with `--db`, or `--db ""` to turn it off). Each row holds the
 setting, the coefficients, the status and the height. `src/rlmath/store.py` documents the tables
