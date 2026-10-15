@@ -19,7 +19,7 @@ Check everything works. This runs the Julia height tests and the Python tests, w
 Julia workers:
 
 ```bash
-julia --project=Qfs -e 'using Pkg; Pkg.test()'
+julia --project=Qfs.jl -e 'using Pkg; Pkg.test()'
 ```
 
 ```bash
@@ -58,11 +58,31 @@ Each run writes to `runs/<name>/`: `config.json`, `log.jsonl` (one line per roun
 (every new polynomial of score at least 2, with when it was found) and `model.pt`.
 `uv run rlmath-train --help` lists every option. `runs_compare.sh` runs all three at p = 5.
 
+## Debugging the height worker
+
+The worker is an ordinary Julia script, so it can be run by hand. First check that the Julia
+environment installs and loads (this shows the real error if a package is missing):
+
+```bash
+julia --project=julia -e 'using Pkg; Pkg.instantiate(); using Qfs, Nemo, Singular; println("ok")'
+```
+
+Then talk to the worker directly. It prints `READY` once loaded, then one reply per request line.
+The polynomial here is the Fermat quartic `w⁴ + x⁴ + y⁴ + z⁴`, which should give `ok 1` at
+p = 5, `inf` at p = 3, and `1` (smooth) for the last line:
+
+```bash
+printf 'H 5 4 4 10 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 1 0 0 0 1\nH 3 4 4 10 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 1 0 0 0 1\nS 5 4 4 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 1 0 0 0 1\n' | julia --project=julia julia/height_worker.jl
+```
+
+Python starts workers with plain `julia` from the `PATH`. If Julia lives somewhere else, put it on
+the `PATH` before running.
+
 ## How the pieces fit
 
 | Piece | File | What it does |
 |---|---|---|
-| Height code | `Qfs/src/Qfs.jl` | The quasi-F-split height algorithm (fast version), on Nemo |
+| Height code | `Qfs.jl/src/Qfs.jl` | The quasi-F-split height algorithm (fast version), on Nemo |
 | Height worker | `julia/height_worker.jl` | Standalone Julia process: reads polynomials on stdin, writes heights or smoothness on stdout |
 | Oracle client | `src/rlmath/oracle.py` | Runs one worker per CPU core, sends batches, caches results, counts oracle calls |
 | Polynomials | `src/rlmath/polynomials.py` | Coefficient vectors, monomial order, height-preserving symmetries |

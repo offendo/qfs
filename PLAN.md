@@ -43,7 +43,7 @@ build has to beat the baseline "sample uniformly, about `p^(h-1)` tries per heig
 
 ## 2. What exists today
 
-**Julia (`Qfs/src/Qfs.jl`).** `quasiFSplitHeight_CY_lift(p, f, cutoff)` does: check homogeneity;
+**Julia (`Qfs.jl/src/Qfs.jl`).** `quasiFSplitHeight_CY_lift(p, f, cutoff)` does: check homogeneity;
 F-split test; compute `Δ = Δ₁(f^(p-1))` by lifting to integers, taking the `p`-th power and
 dividing cross terms by `p`; then iterate `g ↦ u(Δ · g)` (multiply by `Δ` and keep the
 `(p-1, …, p-1)` Frobenius component) up to `cutoff` times. It returns `h`, `cutoff + 2` when the
@@ -138,7 +138,7 @@ These come first, because every method below is bottlenecked by the oracle, not 
 1. **Standalone Julia process, no `juliacall`.** A Julia script that binds a ZMQ socket (ZMQ.jl) and
    speaks msgpack (MsgPack.jl), or plain length-prefixed bytes over TCP. Delete `using PythonCall`,
    `PythonCall.GC.disable()` and `Base.GC.enable(false)` from `Qfs.jl`; drop `PythonCall` from
-   `Qfs/Project.toml`. This eliminates the bus-error class rather than working around it.
+   `Qfs.jl/Project.toml`. This eliminates the bus-error class rather than working around it.
 2. **Depend on Nemo, not all of Oscar.** Everything the height code uses (`polynomial_ring`, `GF`,
    `lift`, `map_coefficients`, `change_coefficient_ring`) is in Nemo/AbstractAlgebra. Oscar pulls in
    GAP, Singular and Polymake, which slows startup and grows memory. Keep Oscar only in a separate

@@ -226,7 +226,7 @@ version = "1.11.0"
 
 [[deps.Qfs]]
 deps = ["Combinatorics", "Memoize", "Nemo"]
-path = "../Qfs"
+path = "../Qfs.jl"
 uuid = "4dc239f1-4141-4bc5-a507-b9f961769d05"
 version = "0.1.0"
 

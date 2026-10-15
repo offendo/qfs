@@ -4,4 +4,4 @@ Qfs = "4dc239f1-4141-4bc5-a507-b9f961769d05"
 Singular = "bcd08a7b-43d2-5ff7-b6d4-c458787f915c"
 
 [sources]
-Qfs = {path = "../Qfs"}
+Qfs = {path = "../Qfs.jl"}

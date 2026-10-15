@@ -1,7 +1,7 @@
 # Why the fast height step gives the same answer
 
 This note proves that `height_fast` (appendix of `PLAN.md`) returns exactly what
-`quasiFSplitHeight_CY_lift` in `Qfs/src/Qfs.jl` returns, for every homogeneous `f` of degree `n`
+`quasiFSplitHeight_CY_lift` in `Qfs.jl/src/Qfs.jl` returns, for every homogeneous `f` of degree `n`
 in `n` variables over `F_p` and every `cutoff`. The proof is about the code: it uses only what the
 Julia functions compute, not any theorem from the KTY paper.
 
