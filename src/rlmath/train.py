@@ -75,6 +75,7 @@ class TrainConfig:
     device: str = "auto"
     seed: int = 0
     out: str = ""
+    db: str = "runs/heights.sqlite"  # every scored polynomial is saved here ("" to disable)
     checkpoint_every: int = 10
 
 
@@ -99,7 +100,7 @@ class Trainer:
         (self.out / "config.json").write_text(json.dumps(asdict(cfg), indent=2))
 
         self.n_monomials = len(monomials(cfg.n, cfg.d))
-        self.oracle = HeightOracle(cfg.p, cfg.n, cfg.d, cfg.cutoff, workers=cfg.workers or None)
+        self.oracle = HeightOracle(cfg.p, cfg.n, cfg.d, cfg.cutoff, workers=cfg.workers or None, db=cfg.db or None)
         self.scorer = Scorer(
             self.oracle,
             infinite_score=cfg.infinite_score,

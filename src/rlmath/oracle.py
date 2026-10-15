@@ -16,6 +16,7 @@ import threading
 import numpy as np
 
 from rlmath.polynomials import key, monomials
+from rlmath.store import HeightStore
 
 log = logging.getLogger(__name__)
 
@@ -98,12 +99,25 @@ class HeightOracle:
 
     Results are cached by polynomial up to scaling, so asking twice is free. `calls` counts the
     polynomials actually sent to Julia, which is the budget every search method is measured by.
+
+    If `db` is a path, every computed height (and smoothness result) is also written to that
+    SQLite file; see rlmath.store.
     """
 
     CHUNK = 64  # max requests per round trip; keeps both pipe buffers far from full
 
-    def __init__(self, p: int, n: int, d: int, cutoff: int = 10, workers: int | None = None, julia: str = "julia"):
+    def __init__(
+        self,
+        p: int,
+        n: int,
+        d: int,
+        cutoff: int = 10,
+        workers: int | None = None,
+        julia: str = "julia",
+        db: str | None = None,
+    ):
         self.p, self.n, self.d, self.cutoff = p, n, d, cutoff
+        self.store = HeightStore(db) if db else None
         self.julia = julia
         self.n_workers = workers or max(1, (os.cpu_count() or 2) - 1)
         env = dict(os.environ, JULIA_NUM_THREADS="1")
@@ -156,6 +170,9 @@ class HeightOracle:
             for k, reply in zip(todo, replies):
                 self.height_cache[k] = _parse_height(reply)
             self.calls += len(todo)
+            if self.store:
+                rows = [(k, self.height_cache[k].status, self.height_cache[k].height) for k in todo]
+                self.store.add_heights(self.p, self.n, self.d, self.cutoff, rows)
         return [self.height_cache[k] for k in keys]
 
     def smooth(self, coeffs: np.ndarray) -> list[bool]:
@@ -174,11 +191,15 @@ class HeightOracle:
                     log.warning("smoothness check failed: %s", reply)
                 self.smooth_cache[k] = reply == "1"
             self.smooth_calls += len(todo)
+            if self.store:
+                self.store.set_smooth(self.p, self.n, self.d, [(k, self.smooth_cache[k]) for k in todo])
         return [self.smooth_cache[k] for k in keys]
 
     def close(self):
         for w in self.workers:
             w.close()
+        if self.store:
+            self.store.close()
 
     def __enter__(self):
         return self

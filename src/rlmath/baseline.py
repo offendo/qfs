@@ -33,6 +33,7 @@ def main(argv=None):
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", default="")
+    parser.add_argument("--db", default="runs/heights.sqlite", help='SQLite file for every scored polynomial ("" to disable)')
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
 
@@ -42,7 +43,7 @@ def main(argv=None):
     rng = np.random.default_rng(args.seed)
     start = time.time()
 
-    with HeightOracle(args.p, args.n, args.d, args.cutoff, workers=args.workers or None) as oracle:
+    with HeightOracle(args.p, args.n, args.d, args.cutoff, workers=args.workers or None, db=args.db or None) as oracle:
         scorer = Scorer(oracle, args.infinite_score, past_cutoff_is_infinite=(args.n == 4 and args.cutoff >= 10))
         pool = ElitePool(args.p, args.n, args.d, per_level=10**9)
         r = 0

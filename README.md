@@ -42,6 +42,11 @@ uv run rlmath-train --p 5 --max-oracle-calls 100000 --no-use-model
 uv run rlmath-baseline --p 5 --max-oracle-calls 100000
 ```
 
+Every polynomial whose height is computed, by any run, is also saved to the SQLite file
+`runs/heights.sqlite` (change with `--db`, or `--db ""` to turn it off). Each row holds the
+setting, the coefficients, the status and the height. `src/rlmath/store.py` documents the tables
+and shows how to read them.
+
 Each run writes to `runs/<name>/`: `config.json`, `log.jsonl` (one line per round), `elites.jsonl`
 (every new polynomial of score at least 2, with when it was found) and `model.pt`.
 `uv run rlmath-train --help` lists every option. `runs_compare.sh` runs all three at p = 5.
