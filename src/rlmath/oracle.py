@@ -100,7 +100,7 @@ class HeightOracle:
     polynomials actually sent to Julia, which is the budget every search method is measured by.
     """
 
-    CHUNK = 64  # requests per round trip; keeps both pipe buffers far from full
+    CHUNK = 64  # max requests per round trip; keeps both pipe buffers far from full
 
     def __init__(self, p: int, n: int, d: int, cutoff: int = 10, workers: int | None = None, julia: str = "julia"):
         self.p, self.n, self.d, self.cutoff = p, n, d, cutoff
@@ -124,7 +124,9 @@ class HeightOracle:
 
     def _run(self, lines: list[str]) -> list[str]:
         """Spread request lines over the workers in chunks and return replies in order."""
-        chunks = [lines[i : i + self.CHUNK] for i in range(0, len(lines), self.CHUNK)]
+        # Small batches (e.g. one local-search step) are split evenly so every worker gets some.
+        size = max(1, min(self.CHUNK, -(-len(lines) // self.n_workers)))
+        chunks = [lines[i : i + size] for i in range(0, len(lines), size)]
 
         def run_chunk(i):
             w = self.workers[i % self.n_workers]
