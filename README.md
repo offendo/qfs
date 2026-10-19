@@ -40,7 +40,7 @@ and the oracle calls used. `uv run rlmath-reinforce --help` lists every option.
 Every polynomial whose height is computed, by any run, is saved to the SQLite file
 `runs/heights.sqlite` (change with `--db`, or `--db ""` to turn it off). Each row holds the
 setting, the coefficients, the status and the height. `src/rlmath/store.py` documents the tables
-and shows how to read them. With `--parent-db-frac 0.5`, half of the parents are drawn from the
+and shows how to read them. By default (`--parent-db-frac 0.5`), half of the parents are drawn from the
 smooth polynomials of height at least `--parent-min-height` saved in that file when the run starts.
 
 Each run writes its model to `runs/<name>/model.pt`.
@@ -83,7 +83,7 @@ class of crashes, and a worker that dies is restarted.
 
 **Environment.** One episode is one step. The observation is a parent polynomial, a vector of 35
 coefficients in F_p (quartics). The action is a child polynomial, a full coefficient vector. The
-reward is `score(child) - score(parent) - hamming_penalty * (coefficients that differ)`. `PolyEnv` runs `--num-envs` episodes as one batch with one
+reward is `score(child) - score(parent) - hamming_penalty * (coefficients that differ) - copy_penalty * (child is exactly the parent)`. `PolyEnv` runs `--num-envs` episodes as one batch with one
 oracle call, and `step` returns the next parents. Parents are uniformly random, or partly drawn from
 the database (`--parent-db-frac`).
 
