@@ -83,9 +83,9 @@ class PolyEnv(gym.vector.VectorEnv):
         n: int = 4,
         d: int = 4,
         cutoff: int = 10,
-        infinite_score: int = 1,  # score of supersingular (infinite-height) polynomials; 1 = not rewarded
-        hamming_penalty: float = 0.0,  # reward lost per coefficient where the child differs from the parent
-        copy_penalty: float = 0.0,  # reward lost when the child is exactly the parent
+        infinite_score: int = 2,  # score of supersingular (infinite-height) polynomials; 1 = not rewarded
+        hamming_penalty: float = 0.1,  # reward lost per coefficient where the child differs from the parent
+        copy_penalty: float = 0.1,  # reward lost when the child is exactly the parent
         workers: int = 0,  # Julia worker processes (0 = number of CPUs - 1)
         db: str = "",  # SQLite file every scored polynomial is saved to, and parents are read from
         parent_db_frac: float = 0.0,  # fraction of parents drawn from the pool, once it is big enough
@@ -167,7 +167,7 @@ class PolyEnv(gym.vector.VectorEnv):
         self._remember(children, child_scores)
         hamming = (children != self.parents).sum(axis=1)
         copied = hamming == 0
-        reward = child_scores - self.parent_scores - self.hamming_penalty * hamming - self.copy_penalty * copied
+        reward = (child_scores - self.parent_scores) - (self.hamming_penalty * hamming) - (self.copy_penalty * copied)
         info = {"parent_score": self.parent_scores, "child_score": child_scores, "hamming": hamming}
         reward = reward.astype(np.float32)
         self.parents, self.parent_scores = self._sample_parents()
