@@ -57,6 +57,7 @@ class Args:
     db: str = "runs/heights.sqlite"  # every scored polynomial is saved here ("" to disable)
     parent_db_frac: float = 0.5  # fraction of parents drawn from the polynomials saved in db
     parent_min_height: int = 2  # ... that have at least this height
+    parent_db_min_size: int = 1000  # parents are all random until the pool holds this many polynomials
 
     # algorithm
     total_timesteps: int = 1_000_000  # children scored
@@ -119,7 +120,8 @@ def main(args: Args):
     envs = PolyEnv(
         args.num_envs, args.p, args.n, args.d, cutoff=args.cutoff, infinite_score=args.infinite_score,
         hamming_penalty=args.hamming_penalty, copy_penalty=args.copy_penalty, workers=args.workers, db=args.db,
-        parent_db_frac=args.parent_db_frac, parent_min_height=args.parent_min_height, seed=args.seed,
+        parent_db_frac=args.parent_db_frac, parent_min_height=args.parent_min_height,
+        parent_db_min_size=args.parent_db_min_size, seed=args.seed,
     )
     agent = Agent(args.p, args.n, args.d, args.d_model, args.n_layers, args.n_heads, args.d_ff).to(device)
     optimizer = torch.optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
@@ -167,6 +169,7 @@ def main(args: Args):
                 "charts/parent_score": float(parent.mean()),
                 "charts/best_child_score": best,
                 "charts/oracle_calls": envs.oracle.calls,
+                "charts/parent_pool": len(envs.pool),
                 "charts/learning_rate": optimizer.param_groups[0]["lr"],
                 "charts/SPS": int(global_step / (time.time() - start)),
                 "losses/policy_loss": pg_loss.item(),
@@ -177,10 +180,10 @@ def main(args: Args):
                 wandb.log(metrics, step=global_step)
             log.info(
                 "iter %d/%d  step %d  reward %+.3f  child %.2f (parent %.2f)  improved %.1f%%  worse %.1f%%  "
-                "hamming %.1f  copied %.1f%%  best %d  calls %d  SPS %d",
+                "hamming %.1f  copied %.1f%%  best %d  pool %d  calls %d  SPS %d",
                 iteration, num_iterations, global_step, metrics["charts/reward"], metrics["charts/child_score"],
                 metrics["charts/parent_score"], 100 * metrics["charts/improved"], 100 * metrics["charts/worse"],
-                metrics["charts/hamming"], 100 * metrics["charts/copied"], best, metrics["charts/oracle_calls"],
+                metrics["charts/hamming"], 100 * metrics["charts/copied"], best, len(envs.pool), metrics["charts/oracle_calls"],
                 metrics["charts/SPS"],
             )
             if iteration % args.save_every == 0:

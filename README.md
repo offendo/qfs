@@ -40,8 +40,10 @@ and the oracle calls used. `uv run rlmath-reinforce --help` lists every option.
 Every polynomial whose height is computed, by any run, is saved to the SQLite file
 `runs/heights.sqlite` (change with `--db`, or `--db ""` to turn it off). Each row holds the
 setting, the coefficients, the status and the height. `src/rlmath/store.py` documents the tables
-and shows how to read them. By default (`--parent-db-frac 0.5`), half of the parents are drawn from the
-smooth polynomials of height at least `--parent-min-height` saved in that file when the run starts.
+and shows how to read them. By default (`--parent-db-frac 0.5`), half of the parents are drawn from a pool of smooth
+polynomials of height at least `--parent-min-height`. The pool starts with the ones saved in that
+file when the run starts and grows with every such polynomial the run scores. Until it holds
+`--parent-db-min-size` polynomials (default 1000), all parents are random.
 
 Each run writes its model to `runs/<name>/model.pt`.
 
