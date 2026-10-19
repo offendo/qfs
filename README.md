@@ -121,6 +121,18 @@ steps, gradient clipping at 1.0 and batch 256. These are the standard transforme
 Training runs 100 steps per round on the elite pool. The model keeps training across rounds
 rather than restarting, because the pool changes gradually.
 
+**Policy-gradient objective (`--objective pg`).** Instead of imitating the elite pool, train the
+edit move directly from its outcome. Each round, parents are drawn from the pool as usual, and each
+(parent, mask) pair is filled `--pg-group-size` times (default 8) by the model. The reward of a
+child is `child score - parent score`, so a child that is singular or the zero polynomial scores
+`-parent score`. The advantage is the reward minus the mean reward of its group, divided by the
+batch's advantage standard deviation (REINFORCE with a group baseline, no critic). One gradient
+step per round, on that round's samples only. The log-probability of an edit is the sum, over the 8
+decoding steps, of the log-probability of each token at the step where it was kept. Generation from
+scratch has no parent and is skipped in this mode. The log shows `edit_mean_reward`,
+`edit_improved` and `edit_worse` per round. Since there is one step per round rather than 100,
+`--warmup-steps` is probably worth lowering.
+
 **Data augmentation.** Each training batch has random symmetries applied that don't change the
 height: permuting the variables, scaling each variable, and scaling the whole polynomial.
 

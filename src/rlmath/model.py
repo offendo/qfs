@@ -95,11 +95,15 @@ class MaskedPolyTransformer(nn.Module):
         height: torch.Tensor,
         temperature: float = 1.0,
         steps: int = 8,
+        trace: list | None = None,
     ) -> torch.Tensor:
         """Fill the masked positions of each row by iterative MaskGIT decoding.
 
         At each step, sample every still-masked position, keep the most confident samples, and
         re-mask the rest; the number left masked follows a cosine schedule down to zero.
+
+        If `trace` is a list, each step appends (input coefficients, revealed positions, sampled
+        tokens), which `trace_log_prob` replays to get the log-probability of what was kept.
         """
         coeffs = coeffs.clone()
         masked = masked.clone()
@@ -120,6 +124,23 @@ class MaskedPolyTransformer(nn.Module):
             order = conf.argsort(dim=1, descending=True)
             rank = order.argsort(dim=1)
             reveal = masked & (rank < n_reveal.unsqueeze(1))
+            if trace is not None:
+                trace.append((coeffs.clone(), reveal.clone(), sample))
             coeffs[reveal] = sample[reveal]
             masked &= ~reveal
         return coeffs
+
+    def trace_log_prob(
+        self, trace: list, height: torch.Tensor, temperature: float = 1.0
+    ) -> torch.Tensor:
+        """Log-probability (B,), with gradient, of the tokens a `fill(..., trace=trace)` call kept.
+
+        Sums log p(token) at each position over the step in which it was revealed, under the same
+        tempered distribution it was sampled from. Call it in the same mode (eval) as the fill.
+        """
+        total = 0.0
+        for inputs, reveal, sample in trace:
+            logp = (self(inputs, height) / max(temperature, 1e-6)).log_softmax(-1)
+            chosen = logp.gather(-1, sample.unsqueeze(-1)).squeeze(-1)  # (B, M)
+            total = total + (chosen * reveal).sum(dim=1)
+        return total

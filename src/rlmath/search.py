@@ -100,8 +100,13 @@ class ElitePool:
         rows = [e for level in self.levels.values() for e in level.values()]
         return np.array([e.coeffs for e in rows]), np.array([e.score for e in rows])
 
-    def sample_parents(self, rng: np.random.Generator, count: int, temperature: float = 1.0) -> np.ndarray:
-        """Pick parents for editing, favouring higher levels: P(level s) ∝ exp(s / temperature)."""
+    def sample_parents(
+        self, rng: np.random.Generator, count: int, temperature: float = 1.0, with_scores: bool = False
+    ):
+        """Pick parents for editing, favouring higher levels: P(level s) ∝ exp(s / temperature).
+
+        Returns the coefficients, and also their scores if `with_scores`.
+        """
         levels = sorted(self.levels)
         w = np.exp((np.array(levels) - max(levels)) / temperature)
         picks = rng.choice(len(levels), size=count, p=w / w.sum())
@@ -109,6 +114,8 @@ class ElitePool:
         for li in picks:
             level = list(self.levels[levels[li]].values())
             out.append(level[rng.integers(len(level))].coeffs)
+        if with_scores:
+            return np.array(out), np.array(levels)[picks]
         return np.array(out)
 
 
