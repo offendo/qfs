@@ -63,9 +63,29 @@ def test_parents_from_the_database(tmp_path):
         env.step(env.action_space.sample())
     env.close()
 
-    env = make_env(tmp_path, parent_db_frac=1.0, parent_min_height=2)
+    env = make_env(tmp_path, parent_db_frac=1.0, parent_min_height=2, parent_db_min_size=1)
     obs, _ = env.reset(seed=1)
     assert (env.parent_scores >= 2).all()
     _, reward, *_ = env.step(obs.copy())
     assert (reward == 0).all()  # the stored heights agree with a fresh computation
+    env.close()
+
+
+def test_parents_switch_to_the_pool_once_it_is_big_enough(tmp_path):
+    env = make_env(tmp_path, parent_db_frac=1.0, parent_min_height=2, parent_db_min_size=40)
+    env.reset(seed=0)
+    assert len(env.pool) < 40 and not (env.parent_scores >= 2).all()  # pool too small: random parents
+    for _ in range(5):
+        env.step(env.action_space.sample())  # the children it scores fill the pool
+    assert len(env.pool) >= 40
+    assert (env.parent_scores >= 2).all()  # parents now come from the pool
+    env.close()
+
+
+def test_pool_is_not_used_when_no_fraction_is_set(tmp_path):
+    env = make_env(tmp_path)
+    env.reset(seed=0)
+    for _ in range(3):
+        env.step(env.action_space.sample())
+    assert len(env.pool) == 0
     env.close()
