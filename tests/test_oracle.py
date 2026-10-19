@@ -1,11 +1,19 @@
 import numpy as np
 
-from rlmath.polynomials import augment, monomials, random_polys
+from rlmath.polynomials import monomials, random_polys
 
 
 def fermat(n=4, d=4):
     mons = monomials(n, d)
     return (mons.max(axis=1) == d).astype(np.int64)
+
+
+def permute_variables(f, perm, n=4, d=4):
+    """Rename the variables of each row of f: new variable j is old variable perm[j]."""
+    mons = monomials(n, d)
+    where = {tuple(m): i for i, m in enumerate(mons)}
+    index = np.array([where[tuple(m[list(perm)])] for m in mons])
+    return f[:, index]
 
 
 def test_fermat_heights(oracle_factory):
@@ -37,5 +45,5 @@ def test_symmetries_preserve_height(oracle_factory):
     hs = o.heights(f)
     hard = np.array([r.status == "ok" and r.height >= 2 for r in hs])
     f = f[hard][:30]
-    g = augment(rng, f, 3, 4, 4)
+    g = permute_variables(f, rng.permutation(4))
     assert [r.height for r in o.heights(f)] == [r.height for r in o.heights(g)]
