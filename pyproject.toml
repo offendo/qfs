@@ -16,7 +16,7 @@ readme = "README.md"
 requires-python = ">= 3.10"
 
 [project.scripts]
-rlmath-ppo = "rlmath.ppo:cli"
+rlmath-reinforce = "rlmath.reinforce:cli"
 
 [dependency-groups]
 dev = ["pytest>=8"]
