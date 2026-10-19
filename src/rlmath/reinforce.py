@@ -52,9 +52,10 @@ class Args:
     cutoff: int = 10  # quartic K3 surfaces: finite heights are at most 10
     infinite_score: int = 1  # score of supersingular polynomials; 1 = not rewarded
     hamming_penalty: float = 0.5  # reward lost per coefficient that differs from the parent (to be tuned)
+    copy_penalty: float = 100.0  # reward lost when the child is exactly the parent
     workers: int = 0  # Julia worker processes (0 = number of CPUs - 1)
     db: str = "runs/heights.sqlite"  # every scored polynomial is saved here ("" to disable)
-    parent_db_frac: float = 0.0  # fraction of parents drawn from the polynomials saved in db
+    parent_db_frac: float = 0.5  # fraction of parents drawn from the polynomials saved in db
     parent_min_height: int = 2  # ... that have at least this height
 
     # algorithm
@@ -116,8 +117,9 @@ def main(args: Args):
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
     envs = PolyEnv(
-        args.num_envs, args.p, args.n, args.d, args.cutoff, args.infinite_score, args.hamming_penalty,
-        args.workers, args.db, args.parent_db_frac, args.parent_min_height, args.seed,
+        args.num_envs, args.p, args.n, args.d, cutoff=args.cutoff, infinite_score=args.infinite_score,
+        hamming_penalty=args.hamming_penalty, copy_penalty=args.copy_penalty, workers=args.workers, db=args.db,
+        parent_db_frac=args.parent_db_frac, parent_min_height=args.parent_min_height, seed=args.seed,
     )
     agent = Agent(args.p, args.n, args.d, args.d_model, args.n_layers, args.n_heads, args.d_ff).to(device)
     optimizer = torch.optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
@@ -160,6 +162,7 @@ def main(args: Args):
                 "charts/improved": float((child > parent).mean()),
                 "charts/worse": float((child < parent).mean()),
                 "charts/hamming": float(info["hamming"].mean()),
+                "charts/copied": float((info["hamming"] == 0).mean()),
                 "charts/child_score": float(child.mean()),
                 "charts/parent_score": float(parent.mean()),
                 "charts/best_child_score": best,
@@ -174,10 +177,11 @@ def main(args: Args):
                 wandb.log(metrics, step=global_step)
             log.info(
                 "iter %d/%d  step %d  reward %+.3f  child %.2f (parent %.2f)  improved %.1f%%  worse %.1f%%  "
-                "hamming %.1f  best %d  calls %d  SPS %d",
+                "hamming %.1f  copied %.1f%%  best %d  calls %d  SPS %d",
                 iteration, num_iterations, global_step, metrics["charts/reward"], metrics["charts/child_score"],
                 metrics["charts/parent_score"], 100 * metrics["charts/improved"], 100 * metrics["charts/worse"],
-                metrics["charts/hamming"], best, metrics["charts/oracle_calls"], metrics["charts/SPS"],
+                metrics["charts/hamming"], 100 * metrics["charts/copied"], best, metrics["charts/oracle_calls"],
+                metrics["charts/SPS"],
             )
             if iteration % args.save_every == 0:
                 save()

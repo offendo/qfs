@@ -15,12 +15,23 @@ def test_spaces_and_reset(tmp_path):
     env.close()
 
 
-def test_copying_the_parent_gives_zero_reward(tmp_path):
+def test_copying_the_parent_gives_zero_reward_without_a_copy_penalty(tmp_path):
     env = make_env(tmp_path)
     obs, _ = env.reset(seed=0)
     _, reward, terminated, truncated, info = env.step(obs.copy())
     assert (reward == 0).all() and terminated.all() and not truncated.any()
     assert (info["child_score"] == info["parent_score"]).all()
+    env.close()
+
+
+def test_copy_penalty_only_hits_exact_copies(tmp_path):
+    env = make_env(tmp_path, hamming_penalty=0.5, copy_penalty=100.0)
+    obs, _ = env.reset(seed=0)
+    child = obs.copy()
+    child[32:, 0] = (child[32:, 0] + 1) % 3  # half the rows change one coefficient
+    _, reward, _, _, info = env.step(child)
+    assert (reward[:32] == -100).all()
+    assert np.allclose(reward[32:], info["child_score"][32:] - info["parent_score"][32:] - 0.5)
     env.close()
 
 

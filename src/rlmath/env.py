@@ -2,9 +2,9 @@
 
 An episode is one step. The observation is a parent polynomial (its coefficient vector over F_p),
 the action is a child polynomial (a full coefficient vector), and the reward is
-score(child) - score(parent) - hamming_penalty * (number of coefficients where they differ). The
-score is the quasi-F-split height of a smooth polynomial; a singular or zero polynomial scores 0,
-so it is never worth producing.
+score(child) - score(parent) - hamming_penalty * (number of coefficients where they differ)
+- copy_penalty if the child is exactly the parent. The score is the quasi-F-split height of a smooth
+polynomial; a singular or zero polynomial scores 0, so it is never worth producing.
 
 `PolyEnv` is a vector env: its `num_envs` episodes run as one batch, scored with one call to the
 height oracle. Every episode ends after its single step, so `step` returns the next episodes'
@@ -53,6 +53,7 @@ class PolyEnv(gym.vector.VectorEnv):
         cutoff: int = 10,
         infinite_score: int = 1,  # score of supersingular (infinite-height) polynomials; 1 = not rewarded
         hamming_penalty: float = 0.0,  # reward lost per coefficient where the child differs from the parent
+        copy_penalty: float = 0.0,  # reward lost when the child is exactly the parent
         workers: int = 0,  # Julia worker processes (0 = number of CPUs - 1)
         db: str = "",  # SQLite file every scored polynomial is saved to, and parents are read from
         parent_db_frac: float = 0.0,
@@ -62,7 +63,7 @@ class PolyEnv(gym.vector.VectorEnv):
         self.num_envs = num_envs
         self.p, self.n, self.d = p, n, d
         self.cutoff, self.infinite_score = cutoff, infinite_score
-        self.hamming_penalty = hamming_penalty
+        self.hamming_penalty, self.copy_penalty = hamming_penalty, copy_penalty
         # For quartic K3 surfaces a chain that runs past the cutoff is supersingular.
         self.past_cutoff_is_infinite = n == 4 and d == 4 and cutoff >= 10
         m = len(monomials(n, d))
@@ -74,7 +75,10 @@ class PolyEnv(gym.vector.VectorEnv):
         self.rng = np.random.default_rng(seed)
         self.oracle = HeightOracle(p, n, d, cutoff, workers=workers or None, db=db or None)
         self.parent_db_frac = parent_db_frac
-        self.db_parents, self.db_scores = self._load_db_parents(db, parent_min_height) if parent_db_frac else (None, None)
+        use_db = bool(parent_db_frac and db)
+        if parent_db_frac and not db:
+            log.warning("parent_db_frac is set but there is no db; parents are all random")
+        self.db_parents, self.db_scores = self._load_db_parents(db, parent_min_height) if use_db else (None, None)
 
 
     def _load_db_parents(self, db: str, min_height: int) -> tuple[np.ndarray, np.ndarray]:
@@ -121,8 +125,10 @@ class PolyEnv(gym.vector.VectorEnv):
         children = np.asarray(actions, dtype=np.int64)
         child_scores = self._score(children)
         hamming = (children != self.parents).sum(axis=1)
-        reward = (child_scores - self.parent_scores - self.hamming_penalty * hamming).astype(np.float32)
+        copied = hamming == 0
+        reward = child_scores - self.parent_scores - self.hamming_penalty * hamming - self.copy_penalty * copied
         info = {"parent_score": self.parent_scores, "child_score": child_scores, "hamming": hamming}
+        reward = reward.astype(np.float32)
         self.parents, self.parent_scores = self._sample_parents()
         terminated = np.ones(self.num_envs, dtype=bool)
         return self.parents.copy(), reward, terminated, np.zeros(self.num_envs, dtype=bool), info
