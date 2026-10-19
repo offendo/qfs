@@ -2,8 +2,9 @@
 
 An episode is one step. The observation is a parent polynomial (its coefficient vector over F_p),
 the action is a child polynomial (a full coefficient vector), and the reward is
-score(child) - score(parent). The score is the quasi-F-split height of a smooth polynomial; a
-singular or zero polynomial scores 0, so it is never worth producing.
+score(child) - score(parent) - hamming_penalty * (number of coefficients where they differ). The
+score is the quasi-F-split height of a smooth polynomial; a singular or zero polynomial scores 0,
+so it is never worth producing.
 
 `PolyEnv` is a vector env: its `num_envs` episodes run as one batch, scored with one call to the
 height oracle. Every episode ends after its single step, so `step` returns the next episodes'
@@ -51,6 +52,7 @@ class PolyEnv(gym.vector.VectorEnv):
         d: int = 4,
         cutoff: int = 10,
         infinite_score: int = 1,  # score of supersingular (infinite-height) polynomials; 1 = not rewarded
+        hamming_penalty: float = 0.0,  # reward lost per coefficient where the child differs from the parent
         workers: int = 0,  # Julia worker processes (0 = number of CPUs - 1)
         db: str = "",  # SQLite file every scored polynomial is saved to, and parents are read from
         parent_db_frac: float = 0.0,
@@ -60,6 +62,7 @@ class PolyEnv(gym.vector.VectorEnv):
         self.num_envs = num_envs
         self.p, self.n, self.d = p, n, d
         self.cutoff, self.infinite_score = cutoff, infinite_score
+        self.hamming_penalty = hamming_penalty
         # For quartic K3 surfaces a chain that runs past the cutoff is supersingular.
         self.past_cutoff_is_infinite = n == 4 and d == 4 and cutoff >= 10
         m = len(monomials(n, d))
@@ -117,8 +120,9 @@ class PolyEnv(gym.vector.VectorEnv):
     def step(self, actions: np.ndarray):
         children = np.asarray(actions, dtype=np.int64)
         child_scores = self._score(children)
-        reward = (child_scores - self.parent_scores).astype(np.float32)
-        info = {"parent_score": self.parent_scores, "child_score": child_scores}
+        hamming = (children != self.parents).sum(axis=1)
+        reward = (child_scores - self.parent_scores - self.hamming_penalty * hamming).astype(np.float32)
+        info = {"parent_score": self.parent_scores, "child_score": child_scores, "hamming": hamming}
         self.parents, self.parent_scores = self._sample_parents()
         terminated = np.ones(self.num_envs, dtype=bool)
         return self.parents.copy(), reward, terminated, np.zeros(self.num_envs, dtype=bool), info

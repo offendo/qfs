@@ -29,13 +29,13 @@ uv run pytest
 ## Running
 
 ```bash
-uv run rlmath-ppo --p 5 --total-timesteps 1000000 --track
+uv run rlmath-reinforce --p 5 --total-timesteps 1000000 --track
 ```
 
 `--track` logs to Weights and Biases (run `wandb login` first, or set `WANDB_MODE=offline`). Without
 it, each iteration still prints a summary line: the mean reward, the share of children that beat
-or fell below their parent, the share of coefficients copied from the parent, the best score so
-far and the oracle calls used. `uv run rlmath-ppo --help` lists every option.
+or fell below their parent, the mean Hamming distance from parent to child, the best score so far
+and the oracle calls used. `uv run rlmath-reinforce --help` lists every option.
 
 Every polynomial whose height is computed, by any run, is saved to the SQLite file
 `runs/heights.sqlite` (change with `--db`, or `--db ""` to turn it off). Each row holds the
@@ -74,7 +74,7 @@ the `PATH` before running.
 | Oracle client | `src/rlmath/oracle.py` | Runs one worker per CPU core, sends batches, caches results, counts oracle calls |
 | Polynomials | `src/rlmath/polynomials.py` | Coefficient vectors and the monomial order |
 | Environment | `src/rlmath/env.py` | Gymnasium vector env: parent in, child out, reward `score(child) - score(parent)` |
-| Agent and training | `src/rlmath/ppo.py` | Transformer policy and a PPO loop in the style of CleanRL's `ppo.py` |
+| Agent and training | `src/rlmath/reinforce.py` | Transformer policy and a REINFORCE loop, laid out like a CleanRL script |
 
 Julia never runs inside Python. Each worker is its own process, which removes the "bus error"
 class of crashes, and a worker that dies is restarted.
@@ -83,7 +83,7 @@ class of crashes, and a worker that dies is restarted.
 
 **Environment.** One episode is one step. The observation is a parent polynomial, a vector of 35
 coefficients in F_p (quartics). The action is a child polynomial, a full coefficient vector. The
-reward is `score(child) - score(parent)`. `PolyEnv` runs `--num-envs` episodes as one batch with one
+reward is `score(child) - score(parent) - hamming_penalty * (coefficients that differ)`. `PolyEnv` runs `--num-envs` episodes as one batch with one
 oracle call, and `step` returns the next parents. Parents are uniformly random, or partly drawn from
 the database (`--parent-db-frac`).
 
@@ -98,12 +98,13 @@ its effort there. Use `--infinite-score 10` to target them deliberately.
 built as a sum of per-variable exponent embeddings), the 35 tokens go through a
 `torch.nn.TransformerEncoder` (4 layers, width 128, 4 heads, feed-forward 512, pre-norm, no
 dropout), and a linear layer gives p logits per coefficient. The child is sampled, coefficient by
-coefficient, from those softmaxes. The log-probability of the child is the sum of the 35. A second
-linear layer on the mean of the encoded tokens gives the value estimate. There is no dropout because
-PPO needs the policy to be the same function when it samples and when it updates.
+coefficient, from those softmaxes. The log-probability of the child is the sum of the 35. There is no value head.
 
-**Algorithm.** PPO as in CleanRL's `ppo.py`, with one change that follows from one-step episodes:
-there is no bootstrapping or GAE, so the return is the reward and the advantage is
-`reward - value(parent)`. Each iteration scores `--num-envs` children and runs `--update-epochs`
-passes of clipped-PPO minibatch updates on them. The entropy bonus is off by default
-(`--ent-coef 0`), as in CleanRL's continuous-action PPO, which also sums over action dimensions.
+**Algorithm.** REINFORCE. Episodes have one step, so each iteration scores `--num-envs` children
+and takes one gradient step on `-(reward - baseline) * log pi(child | parent)`, with no critic.
+The reward contains `-score(parent)`, which depends on the parent alone, so subtracting it
+changes nothing in expectation and only removes noise. The baseline is therefore that term plus the
+batch mean of the rest; in effect the advantage is `(child score - Hamming penalty)` centred on the
+batch mean, divided by its standard deviation. The layout (a dataclass of arguments parsed by
+`tyro`, optional wandb, one loop) follows CleanRL's scripts, but nothing is imported from it. The
+entropy bonus is off by default (`--ent-coef 0`).

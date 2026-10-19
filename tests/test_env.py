@@ -33,6 +33,18 @@ def test_zero_polynomial_scores_zero(tmp_path):
     env.close()
 
 
+def test_hamming_penalty(tmp_path):
+    env = make_env(tmp_path, hamming_penalty=0.5)
+    obs, _ = env.reset(seed=0)
+    parent = env.parent_scores.copy()
+    child = obs.copy()
+    child[:, :3] = (child[:, :3] + 1) % 3  # change exactly three coefficients
+    _, reward, _, _, info = env.step(child)
+    assert (info["hamming"] == 3).all()
+    assert np.allclose(reward, info["child_score"] - parent - 1.5)
+    env.close()
+
+
 def test_parents_from_the_database(tmp_path):
     env = make_env(tmp_path)
     env.reset(seed=0)
