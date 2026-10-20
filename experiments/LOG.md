@@ -357,3 +357,165 @@ ends, so extra steps cannot help, and the drift before freezing is not monotone 
 retention 8.3% / 3.3% / 1.6% at parents 4 / 5 / 6. Between `r7_free1` and `r1_free3`, and about equal to seed 2 of free3.
 **Takeaway.** Budgets of 1-3 all land in the same band (within about 0.04 overall), with seed noise of the same size.
 (The odd last-iteration line "child 1.00" printed in the run log is a single batch of 8 parents, not the final policy.)
+
+---
+
+## E14. A single-edit policy, and its supervised warm start
+
+**Why.** Everything so far suggested the best policies make exactly one change, but the coefficient-by-coefficient output
+cannot guarantee that: the SFT policies copy their parent 35% of the time (a wasted sample and a -100 penalty in RL),
+the number of changed coefficients is only controlled indirectly by a penalty, and the 35-dimensional action space makes
+the policy-gradient signal sparse. A one-softmax output over the 35 x (p-1) = 70 (position, new value) pairs fixes all
+three, keeps the same network and the one-shot "embed, encode, project" structure, and makes a group of 128 children per
+parent nearly cover the whole action space. **[choice, a deviation from the output head the user described, made under the
+user's allowance for the night and documented here.]**
+
+**What.** `--single` in `rlmath-reinforce`, `rlmath-sft` and the evaluation: the per-coefficient logits are masked where a
+value equals the parent's own, flattened to one 70-way softmax, and one pair is sampled. Exactly one coefficient changes;
+the log-probability is exact. Entropy and KL needed NaN-safe versions for the masked logits (found by a test: a
+`0 * NaN` gradient). SFT (`sf1_single`): the same pairs as S1 (child >= parent, 1.37M), 8 epochs, 128 wide, 4 layers.
+
+**SFT result.** Held-out NLL **3.182** nats per pair, against ln 70 = 4.248 for a uniform choice among the 70 single
+changes: the model gives the held-out good edit about 2.9x the probability a uniform pick would. (The factorized SFT's
+4.15 is not comparable: that model also pays to say "keep" at 34 positions.)
+
+**Evaluation** (single-edit policies always change exactly one coefficient, so compare them with random-1):
+
+| method | ceiling 2 | ceiling 3 | ceiling 4 | ceiling 5 | ceiling 6 | ceiling 7 | ceiling 8 |
+|---|---|---|---|---|---|---|---|
+| random-1 | -0.549 | -1.129 | -1.772 | -2.467 | -3.195 | -3.958 | -4.783 |
+| sf1_single | -0.306 | -0.881 | -1.525 | -2.223 | -2.945 | -3.710 | -4.533 |
+
+`sf1_single` is ahead of random-1 by a nearly constant 0.24-0.25 at every ceiling, and ahead of the factorized SFT (S1) by
+about 0.05 (e.g. -0.306 vs -0.352 at ceiling 2, from the same evaluation).
+
+## E15. RL with the single-edit policy: from scratch (`q1`), from the SFT init (`q2`), and with a KL tether (`q3`)
+
+**Why.** Test the single-edit policy under RL, with and without the supervised warm start. **What.** `--single`
+with the E3 settings; `q1` from scratch; `q2` with `--init sf1_single.pt`; `q3` as `q2` plus `--kl-coef 0.1`. 1.5M children each.
+
+| method | ceiling 2 | ceiling 3 | ceiling 4 | ceiling 5 | ceiling 6 | ceiling 7 | ceiling 8 |
+|---|---|---|---|---|---|---|---|
+| random-1 | -0.549 | -1.129 | -1.772 | -2.467 | -3.195 | -3.958 | -4.783 |
+| r1_free3 | -0.292 | -0.891 | -1.524 | -2.221 | -2.940 | -3.704 | -4.522 |
+| sf1_single | -0.306 | -0.881 | -1.525 | -2.223 | -2.945 | -3.710 | -4.533 |
+| q1_single_scratch | -0.417 | -1.017 | -1.625 | -2.340 | -3.054 | -3.830 | -4.661 |
+| q2_single_sf1 | -0.278 | -0.863 | -1.489 | -2.200 | -2.923 | -3.682 | -4.504 |
+| q3_single_sf1_kl | -0.297 | -0.852 | -1.511 | -2.215 | -2.940 | -3.716 | -4.515 |
+
+**Result.** `q2` (RL from the single-edit SFT) is **the best or within 0.01 of the best policy of the night** at every ceiling
+(e.g. -0.278 at ceiling 2 and -4.504 at ceiling 8; `q3` is best at ceiling 3), 0.27-0.28 ahead of random-1, and ahead of the
+best factorized policy `r1_free3` by 0.01-0.04. `q3` (KL tether) is roughly the SFT policy plus a little, and `q1` (no SFT) is clearly worse than any SFT-based policy
+(-0.417 at ceiling 2), as the SFT-vs-scratch result for the factorized policy suggested. With a single edit, the SFT
+warm start matters (0.14 at ceiling 2 between `q1` and `q2`), unlike with the factorized policy and a small Hamming budget.
+`q2` has not been repeated across seeds yet (see E19).
+
+## E16. Starting the curriculum at the top (`h1_top_s1..s3`, `--curriculum-start 6`)
+
+**Why.** I (wrongly, see the erratum) took `r10`'s high-parent retention as a sign that training on high parents teaches
+structure; this tests the hypothesis directly. **What.** `r1_free3` with the curriculum ceiling starting at 6 instead of 2
+(so parents are mostly heights 4-6), seeds 1-3. **Result** (evaluation E; ceiling 8 has parents up to height 8, which none of
+the policies saw as parents in training):
+
+| method | ceiling 2 | ceiling 4 | ceiling 6 | ceiling 7 | ceiling 8 |
+|---|---|---|---|---|---|
+| random-1 | -0.549 | -1.774 | -3.190 | -3.954 | -4.774 |
+| r1_free3 | -0.292 | -1.523 | -2.942 | -3.703 | -4.523 |
+| h1_top_s1 | -0.346 | -1.571 | -2.993 | -3.752 | -4.580 |
+| h1_top_s2 | -0.372 | -1.588 | -2.990 | -3.755 | -4.586 |
+| h1_top_s3 | -0.348 | -1.581 | -3.001 | -3.756 | -4.585 |
+
+All three seeds behave like S1 and a little behind `r1_free3` (0.05-0.08 behind at ceiling 2, 0.06 at ceiling 8), none better,
+and none of the three collapsed (unlike seed 3 of E11). Retention at parent heights 6 / 7 / 8 (copies excluded, evaluation F)
+is 0.8% / 0.1-0.3% / 0.1-0.2%, the same as the other policies. **Starting on high parents neither helps nor hurts here**; the hypothesis is not supported.
+
+## E17. Does a policy use its input? An edit chosen for another parent
+
+**Why.** Every policy has a mean child score that is the same at every ceiling, which suggests the gain over random edits
+is a parent-independent habit, not parent-specific skill. **What.** `experiments/parent_dependence.py`: each parent gets the
+edit (same positions, same shifts mod p) the policy produced for a different parent in the same batch. If that
+"mismatched" edit does as well as the policy's own, the policy ignores its input.
+
+| ceiling | policy | own edit | edit chosen for another parent | difference (use of the parent) |
+|---|---|---|---|---|
+| 2 | random-1 | -0.549 | - | - |
+| 2 | sf1_single | -0.296 | -0.339 | +0.043 |
+| 2 | **q2_single_sf1** | **-0.282** | **-0.479** | **+0.197** |
+| 2 | q1_single_scratch | -0.406 | -0.440 | +0.034 |
+| 2 | s1_ge_all | -0.354 | -0.405 | +0.051 |
+| 2 | r1_free3 | -0.292 | -0.315 | +0.023 |
+| 6 | random-1 | -3.197 | - | - |
+| 6 | sf1_single | -2.948 | -2.989 | +0.041 |
+| 6 | **q2_single_sf1** | **-2.908** | **-3.121** | **+0.213** |
+| 6 | q1_single_scratch | -3.063 | -3.081 | +0.018 |
+| 6 | s1_ge_all | -3.010 | -3.046 | +0.036 |
+| 6 | r1_free3 | -2.939 | -2.957 | +0.018 |
+
+(ceilings 4 and 8 give the same pattern: `q2` +0.195 and +0.198; every other policy +0.02 to +0.08.)
+
+**Result.** For every policy except `q2`, **74-91% of the gain over a random single change survives when the edit was
+chosen for the wrong parent** (e.g. `sf1_single` -0.339 vs random -0.549, own -0.296): they learned a good fixed
+distribution over edits. For `q2` an edit chosen for another parent is only 0.07 better than random, while its own edit
+is 0.27 better: **about three quarters of `q2`'s advantage comes from reading the parent.** The size of the parent
+dependence is the same (+0.20) at every ceiling, so it is a skill that does not depend on how high the parent is.
+My interpretation, untested: choosing, for the polynomial in front of it, a single change that makes the child
+non-F-split (height >= 2), which is a condition on a single coefficient (the first step of the staircase), not climbing
+the later steps.
+
+## E18. Corrected final comparison (evaluation F)
+
+Same parents for every method, ceilings 2 / 4 / 6 / 8 (mean parent score 2.00 / 3.22 / 4.64 / 6.23), copies redrawn up to
+100 times. Improvement (child score - parent score; higher is better):
+
+| method | ceiling 2 | ceiling 4 | ceiling 6 | ceiling 8 |
+|---|---|---|---|---|
+| random-1 | -0.549 | -1.774 | -3.190 | -4.777 |
+| random-2 | -0.716 | -1.943 | -3.362 | -4.962 |
+| scratch | -0.451 | -1.678 | -3.083 | -4.710 |
+| s1_ge_all | -0.354 | -1.570 | -3.006 | -4.575 |
+| s4_big | -0.331 | -1.575 | -2.990 | -4.585 |
+| r1_free3 | -0.291 | -1.524 | -2.940 | -4.523 |
+| r7_free1 | -0.355 | -1.556 | -2.970 | -4.560 |
+| r8_s1_free1 | -0.297 | -1.513 | -2.933 | -4.525 |
+| r9_free3_s2 | -0.336 | -1.562 | -2.963 | -4.555 |
+| r10_free3_s3 | -0.716 | -1.881 | -3.243 | -4.739 |
+| r12_free2 | -0.331 | -1.541 | -2.964 | -4.537 |
+| h1_top_s1 | -0.347 | -1.571 | -2.993 | -4.583 |
+| h1_top_s2 | -0.374 | -1.595 | -3.001 | -4.598 |
+| h1_top_s3 | -0.348 | -1.580 | -3.004 | -4.588 |
+| sf1_single | -0.298 | -1.515 | -2.939 | -4.548 |
+| q1_single_scratch | -0.417 | -1.628 | -3.058 | -4.650 |
+| q2_single_sf1 | -0.279 | -1.501 | -2.912 | -4.510 |
+| q3_single_sf1_kl | -0.296 | -1.507 | -2.936 | -4.536 |
+
+Share of children at least as high as their parent, by exact parent height, **exact copies not counted** (ceiling-8 pool):
+
+| method | parent 2 | parent 3 | parent 4 | parent 5 | parent 6 | parent 7 | parent 8 |
+|---|---|---|---|---|---|---|---|
+| random-1 | 43.8 | 13.6 | 5.3 | 1.7 | 0.7 | 0.2 | 0.1 |
+| random-2 | 28.5 | 10.5 | 3.9 | 1.1 | 0.4 | 0.1 | 0.0 |
+| random-3 | 23.4 | 8.3 | 2.7 | 0.8 | 0.3 | 0.0 | 0.0 |
+| scratch | 55.4 | 17.6 | 5.6 | 1.9 | 0.8 | 0.2 | 0.0 |
+| s1_ge_all | 65.7 | 23.8 | 7.1 | 2.3 | 0.8 | 0.3 | 0.1 |
+| s4_big | 67.0 | 21.0 | 7.2 | 2.5 | 0.9 | 0.2 | 0.1 |
+| r1_free3 | 68.2 | 23.6 | 7.5 | 2.3 | 1.0 | 0.4 | 0.1 |
+| r7_free1 | 62.9 | 20.3 | 6.5 | 2.5 | 1.0 | 0.3 | 0.0 |
+| r8_s1_free1 | 69.2 | 22.8 | 7.6 | 2.6 | 1.1 | 0.3 | 0.1 |
+| r9_free3_s2 | 68.2 | 22.3 | 6.7 | 2.8 | 0.9 | 0.1 | 0.1 |
+| r10_free3_s3 | 23.6 | 7.5 | 2.1 | 0.7 | 0.2 | 0.1 | 0.0 |
+| r12_free2 | 65.1 | 21.8 | 6.8 | 2.6 | 0.6 | 0.2 | 0.1 |
+| h1_top_s1 | 66.8 | 21.7 | 6.7 | 2.6 | 0.8 | 0.1 | 0.1 |
+| h1_top_s2 | 64.6 | 20.8 | 7.1 | 2.4 | 0.8 | 0.1 | 0.2 |
+| h1_top_s3 | 64.5 | 21.3 | 7.1 | 2.5 | 0.8 | 0.3 | 0.1 |
+| sf1_single | 68.3 | 20.9 | 7.1 | 2.5 | 0.7 | 0.3 | 0.1 |
+| q1_single_scratch | 56.9 | 19.5 | 5.8 | 2.1 | 0.8 | 0.3 | 0.1 |
+| q2_single_sf1 | 68.8 | 22.6 | 8.1 | 2.2 | 1.0 | 0.2 | 0.1 |
+| q3_single_sf1_kl | 70.8 | 22.1 | 7.2 | 2.6 | 0.9 | 0.2 | 0.1 |
+
+**Takeaways.**
+- Apart from the collapsed `r10`, the from-scratch single-edit `q1` and the earlier `scratch` run, every policy is within about
+  0.1 of the best (`q2_single_sf1`) and 0.2-0.3 ahead of random-1 at ceiling 2 (about 0.2 ahead at ceiling 8).
+- The `r10` (seed 3) failure is confirmed: with copies excluded its retention is below random at every parent height.
+- **No policy preserves the height of high parents.** At parent height 6 random single changes keep the height 0.7% of the
+  time and the best policies 1.0-1.1%; at heights 7-8 everything is at the random level (0.0-0.4%). The gains over random
+  are at parent heights 2-4 (e.g. 68-71% vs 44% at height 2, 7-8% vs 5% at height 4).
