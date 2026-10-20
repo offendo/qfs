@@ -180,3 +180,107 @@ E3**. Mean Hamming 3.25 (it never learned small edits), mean child 1.44.
 
 **Takeaway.** With 1.5M children, the smaller group (32 vs 128) did not learn. The larger group baseline appears to
 matter more than parent diversity. One seed.
+
+---
+
+## Second evaluation (B): SFT bigger model, RL from the SFT init, free Hamming budgets 1 and 3
+
+All of E6-E10 below are scored in one evaluation on identical parents (same protocol as E1; the numbers for the methods
+that were also in the first evaluation agree to within about 0.01-0.02, which gives a feeling for the evaluation noise:
+`scratch` -0.454 vs -0.455 at ceiling 2, `s1_ge_all` -0.342 vs -0.362).
+
+Improvement (child score - parent score, higher is better):
+
+| method | ceiling 2 | ceiling 3 | ceiling 4 | ceiling 5 | ceiling 6 | mean Hamming |
+|---|---|---|---|---|---|---|
+| random-1 | -0.549 | -1.129 | -1.772 | -2.467 | -3.195 | 1.00 |
+| random-2 | -0.716 | -1.302 | -1.940 | -2.640 | -3.367 | 2.00 |
+| scratch (E3) | -0.454 | -1.028 | -1.674 | -2.380 | -3.083 | 1.75 |
+| S1 | -0.342 | -0.929 | -1.561 | -2.262 | -2.998 | 1.55 |
+| S4 (bigger SFT model) | -0.338 | -0.916 | -1.557 | -2.274 | -2.990 | 1.55 |
+| r1_free3 (E4) | -0.291 | -0.891 | -1.523 | -2.221 | -2.941 | 1.15 |
+| r3_s1_kl0 (E6) | -0.480 | -1.056 | -1.701 | -2.394 | -3.113 | 4.51 |
+| r5_s1_lr1e4 (E6) | -0.487 | -1.065 | -1.692 | -2.403 | -3.123 | 4.51 |
+| r4_s1_kl01 (E7) | -0.350 | -0.941 | -1.578 | -2.282 | -3.004 | 1.66 |
+| r6_s1_free3 (E8) | -0.298 | -0.897 | -1.517 | -2.217 | -2.942 | 1.98 |
+| r7_free1 (E9) | -0.355 | -0.930 | -1.554 | -2.247 | -2.966 | 1.00 |
+| r8_s1_free1 (E10) | -0.297 | -0.879 | -1.512 | -2.218 | -2.932 | 1.04 |
+
+Share of children that are at least as high as their parent, by exact parent height (the ceiling-6 pool; each row is
+the same parents). This is the number that tells whether a policy preserves the structure of high-height parents:
+
+| method | parent 2 | parent 3 | parent 4 | parent 5 | parent 6 |
+|---|---|---|---|---|---|
+| random-1 | 42.4 | 14.1 | 5.1 | 1.4 | 0.5 |
+| random-2 | 29.6 | 9.8 | 3.4 | 1.1 | 0.4 |
+| scratch | 55.8 | 19.5 | 6.5 | 2.1 | 0.7 |
+| S1 | 66.6 | 22.8 | 7.1 | 2.5 | 0.8 |
+| S4 | 67.1 | 22.5 | 7.7 | 2.3 | 0.8 |
+| r1_free3 | 67.6 | 22.8 | 7.5 | 2.5 | 0.7 |
+| r3_s1_kl0 | 60.2 | 19.8 | 6.6 | 2.5 | 0.8 |
+| r4_s1_kl01 | 66.4 | 21.7 | 7.3 | 2.7 | 0.9 |
+| r5_s1_lr1e4 | 61.6 | 19.8 | 6.8 | 2.3 | 0.7 |
+| r6_s1_free3 | 67.4 | 22.5 | 7.9 | 2.9 | 1.0 |
+| r7_free1 | 64.9 | 21.8 | 8.0 | **3.7** | **1.8** |
+| r8_s1_free1 | 66.1 | 22.9 | 7.4 | 3.0 | 1.1 |
+
+(parents per height: 3790, 5248, 7219, 10237, 14466.)
+
+---
+
+### E6. RL from the SFT init, default settings (`r3_s1_kl0`, `r5_s1_lr1e4`)
+
+**Why.** The user's question was whether SFT can *bootstrap* RL: start the policy gradient from the SFT policy.
+**What.** `rlmath-reinforce --init sft/s1_ge_all.pt` (new `--init` option; model size must match), otherwise the E3
+settings (free Hamming budget 8). `r3`: learning rate 3e-4. `r5`: 1e-4, to protect the init. Both 1.5M children.
+
+**Result.** Both are *worse than the SFT policy they started from* at every ceiling (ceiling 2: -0.480 and -0.487 vs
+-0.342) and even worse than `scratch`; mean Hamming distance grew from 1.55 to 4.51. A lower learning rate did not
+help (it only slowed the same drift).
+
+**Takeaway.** With a free Hamming budget of 8 there is no pressure against larger edits (they cost nothing up to 8
+changed coefficients), and the policy gradient moves toward them even though they are worse on average. The SFT policy
+is a good starting point that RL with this budget actively damages. (Explains why the earlier from-scratch runs had
+Hamming ~1.75: they were pulled down from ~6 by the group baseline, not up.)
+
+### E7. RL from the SFT init with a KL tether (`r4_s1_kl01`)
+
+**Why.** Keep the RL policy near the SFT policy. **What.** E6 plus `--kl-coef 0.1` (new option): penalty
+0.1 * KL(policy || SFT policy), summed over coefficients. **[choice]** 0.1 because per-step policy changes were 0.01-1 nats.
+
+**Result.** Mean Hamming 1.66 and improvement within 0.01 of S1 at every ceiling (-0.350 vs -0.342 at ceiling 2,
+-3.004 vs -2.998 at ceiling 6). The tether stops the damage from E6 but gives **no gain over the SFT policy**.
+
+### E8. SFT init + free Hamming budget 3 (`r6_s1_free3`)
+
+**Why.** E4 showed a budget of 3 helps from scratch; E6 showed a budget of 8 hurts from the SFT init. Combine.
+**Result.** Improvement -0.298 / -0.897 / -1.517 / -2.217 / -2.942, essentially equal to E4 (`r1_free3`, from scratch)
+and slightly better than S1 (by 0.04-0.06). Mean Hamming 1.98. Keeping the parent's height at heights 4-6: 7.9% / 2.9% /
+1.0% vs 7.1% / 2.5% / 0.8% for S1.
+
+### E9. RL from scratch with a free budget of 1 (`r7_free1`), and E10: SFT init + budget 1 (`r8_s1_free1`)
+
+**Why.** Following the trend that fewer free changes is better; with a budget of 1 the policy is pushed to exactly one
+change (each extra changed coefficient costs 0.5). **Result.** Mean Hamming 1.00 (`r7`) and 1.04 (`r8`).
+- Overall improvement: `r8` is the best method in this evaluation at ceilings 3-6 (-0.879 / -1.512 / -2.218 / -2.932),
+  within 0.01-0.02 of `r1_free3`; `r7` (from scratch) is a little worse at low ceilings (-0.355 at ceiling 2).
+- **High parents: `r7_free1` is clearly the best at parent heights 5 and 6** - children keep the height 3.7% (parent 5)
+  and 1.8% (parent 6) of the time, against 1.4% / 0.5% for a random single change and 2.5% / 0.8% for S1. `r8` gets
+  3.0% / 1.1%.
+
+**Takeaway.** The one setting that shows signs of *parent-specific* structure (retention at the highest parents several
+times a random single change) is the one that forces exactly one change and has no supervised prior. It is also not
+the best overall, so there is a trade-off: SFT improves the easy bulk (parent 2-3), and the unsupervised budget-1 policy
+does better at the top.
+
+### S4. Bigger SFT model (256 wide, 8 layers; evaluated here)
+
+Held-out NLL 4.125 vs 4.151 for the small model; evaluation within 0.01 of S1 at every ceiling (e.g. -0.338 vs -0.342).
+**Capacity does not matter for SFT** at this data size, consistent with the earlier offline learnability result.
+
+### Observation across E1-E10: children do not depend on the parent's height
+
+Every method's mean child score is flat across ceilings (e.g. S1 1.65-1.66; `r1_free3` 1.69-1.71; random-1 exactly 1.45),
+although the mean parent score goes from 2.0 to 4.6. The policies mostly lift a parent-independent baseline (child
+score about 1.7 instead of 1.45) and change as little as possible. Only `r7_free1` shows a hint of dependence (child
+1.65 at ceiling 2, 1.68 at ceiling 6; retention at parent 6 of 1.8%).
