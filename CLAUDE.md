@@ -4,13 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project is
 
-`rlmath`: learning-guided search (PatternBoost / cross-entropy style, **not** PPO) for homogeneous
-polynomials of degree `d` in `n` variables over `F_p` (default `n = d = 4`, quartic K3 surfaces) with
-high quasi-F-split height. A polynomial is a vector of coefficients in `0..p-1` over a fixed monomial
-order. Height 1 is generic; each extra level is roughly a `1/p` event, and there is no partial credit
-inside a level. The cost metric is **oracle calls** (height computations), so experiments are compared
-at equal oracle budget. `README.md` has the design rationale and defaults; `PLAN.md` the methodology;
-`PROOF_fast_height.md` why the fast height step equals the original.
+`rlmath`: learning-guided search for homogeneous polynomials of degree `d` in `n` variables over `F_p`
+(default `n = d = 4`, quartic K3 surfaces; 35 coefficients) with high quasi-F-split height. A polynomial is
+a vector of coefficients in `0..p-1` over a fixed monomial order. Height 1 is generic; each extra level is
+roughly a `1/p` event, and there is no partial credit inside a level.
+
+The learner is a one-step policy: a transformer reads a parent polynomial and writes a child, trained with
+REINFORCE (group baseline, no critic; deliberately not PPO) on reward `height(child) - height(parent)` plus
+penalties. The cost metric is **oracle calls** (height computations). `README.md` has the design and run
+instructions; `PLAN.md` the methodology; `PROOF_fast_height.md` why the fast height step equals the original;
+`experiments-notes.md` the summary of the supervised/single-edit experiments and `experiments/LOG.md` every
+experiment (what, why, result, including corrections). Read the notes before proposing a new experiment.
 
 ## Setup and commands
 
@@ -19,23 +23,23 @@ Python (uv) and Julia (1.11) are both required.
 ```bash
 uv sync
 julia --project=julia -e 'using Pkg; Pkg.instantiate()'
-uv run pytest                                   # starts real Julia workers; slow first run
-uv run pytest tests/test_train.py::test_name    # single test
-uv run rlmath-train --p 5 --max-oracle-calls 100000   # model-guided search
-uv run rlmath-train --p 5 --max-oracle-calls 100000 --no-use-model   # local search only
-uv run rlmath-baseline --p 5 --max-oracle-calls 100000                # uniform random
-uv run rlmath-summarize runs/<name>             # comparison table, works mid-run
-./runs_compare.sh                               # all three at p=5
+uv run pytest                                   # starts real Julia workers; ~3 minutes
+uv run pytest tests/test_env.py::test_name      # single test
+uv run rlmath-reinforce --p 3 --total-timesteps 1500000 [--track]   # REINFORCE; --help lists every option
+uv run python experiments/count_pairs.py <heights.sqlite> 3 pairs_p3.npz        # mine (parent, one-edit child) pairs
+uv run rlmath-sft --pairs pairs_p3.npz --out sft.pt [--single] --require ge     # supervised warm start
+uv run rlmath-reinforce --p 3 --init sft.pt [--single] ...                      # RL from the warm start
+uv run python experiments/run_rl.py <name> <snapshot.sqlite> <out_dir> [args]   # one run on its own DB copy
+uv run python experiments/evaluate.py --help    # common-parent comparison against random edits
 ```
 
-`uv run rlmath-train --help` lists all options. There is no linter/formatter config.
-The README mentions `julia --project=Qfs.jl -e 'using Pkg; Pkg.test()'`, but `Qfs.jl/` has no `test/`
-directory, so there are currently no Julia tests.
+There is no linter/formatter config. The README mentions `julia --project=Qfs.jl -e 'using Pkg; Pkg.test()'`,
+but `Qfs.jl/` has no `test/` directory, so there are currently no Julia tests.
 
 ## Architecture
 
-- **Julia never runs inside Python.** `src/rlmath/oracle.py` spawns one `julia/height_worker.jl`
-  process per CPU core and talks to it with a line protocol over stdin/stdout (`MONOS`, `H`, `S`
+- **Julia never runs inside Python.** `src/rlmath/oracle.py` spawns Julia worker processes
+  (`julia/height_worker.jl`) and talks to them with a line protocol over stdin/stdout (`MONOS`, `H`, `S`
   requests; see the header of the worker). Dead workers are restarted. Nothing else may print to the
   worker's stdout. The old juliacall/ZMQ bridge was removed (it caused "bus error" crashes).
 - **Monomial order is a cross-language contract.** `rlmath.polynomials.monomials` must match the
@@ -48,21 +52,36 @@ directory, so there are currently no Julia tests.
   `θ(g) = -f^(p-2)·u(Δ(f)·g)` exists as a prototype in the `PLAN.md` appendix, and
   `PROOF_fast_height.md` proves it equivalent; keep that argument intact if you change the chain step.
   In a fresh clone or worktree run `git submodule update --init Qfs.jl` first.
-- **Scoring (`search.py`):** score = height; anything scoring >= 2 must pass the smoothness check
+- **Scoring (`env.py`, `score`):** score = height; anything scoring >= 2 must pass the smoothness check
   (`S` request) or it scores 0. Infinite height scores 1 by default (`--infinite-score` to change),
   because sparse supersingular quartics flood the search otherwise.
-- **Equivalence:** polynomials are "the same" up to permuting variables, scaling variables and scaling
-  the whole polynomial (`polynomials.py`). The elite pool dedups on this and caps 2000 per height level;
-  training augmentation applies the same height-preserving symmetries.
-- **Training loop (`train.py`):** propose (50% elite edits, 25% model generation, 25% uniform), score
-  via oracle, hill-climb from the best new finds, update elites, train the masked-coefficient
-  transformer (`model.py`, MaskGIT-style objective, height-conditioning token) for 100 steps, repeat.
-- **Persistence:** every computed height goes to `runs/heights.sqlite` (`store.py`); each run writes
-  `runs/<name>/{config.json,log.jsonl,elites.jsonl,train.log,model.pt}`. `runs/` is gitignored.
+- **Environment (`env.py`):** `PolyEnv` is a Gymnasium `VectorEnv` of one-step episodes. Observation = parent,
+  action = child, reward = `score(child) - score(parent)` minus optional penalties (Hamming beyond a free
+  budget, exact copy, repeat of a child already generated this run). Parents come from a `ParentPool` seeded
+  from the SQLite database once it is big enough, weighted toward higher heights (`parent_temperature`) and
+  capped by a curriculum ceiling. Each parent is repeated `children_per_parent` times so the group mean
+  can serve as the baseline.
+- **Policy and training (`reinforce.py`):** `Agent` = coefficient + per-variable exponent embeddings, a
+  transformer encoder, a linear head over `p` values. Default factorized policy samples every coefficient
+  independently; `--single` samples one (position, new value) pair from a single softmax (exactly one
+  change, exact log-prob; masked logits need the NaN-safe entropy and `policy_kl` already in the file).
+  Logs include exact per-step KL, KL to the `--init` policy, and pool/random parent splits.
+- **Supervised warm start (`pairs.py`, `sft.py`):** pairs are found in a heights DB by integer-encoding
+  coefficient vectors in base `p` (p = 2 or 3 only, `p^35 < 2^63`); SFT maximizes log-prob of the child
+  given the parent and can augment with variable renaming (height-preserving).
+- **Equivalence:** polynomials are the same up to scaling the whole polynomial; the pool, the seen set and
+  the pair finder store the scaled form (first nonzero coefficient 1). Renaming variables also preserves height.
+- **Persistence:** every computed height goes to a SQLite file (`store.py`, default `runs/heights.sqlite`);
+  each run writes `runs/<name>/model.pt`. `runs/` is gitignored.
 
 ## Working notes
 
-- Results at a single seed are noisy; compare several seeds before concluding a design change helps.
+- Results at a single seed are noisy (RL runs here froze or collapsed on some seeds). Compare several
+  seeds before concluding a change helps, and use the common-parent evaluation, not training curves.
+- A run writes every scored polynomial into `--db`: point it at a copy, never at a database another job
+  is reading. Delete the `-wal`/`-shm` files together with a database you replace.
+- Check an evaluation's exact-copy handling before trusting a "retention" number (an earlier result was an
+  artifact of this; see the erratum in `experiments/LOG.md`).
 - When debugging the worker, run it by hand (README section "Debugging the height worker" has a
   known-answer input: Fermat quartic gives `ok 1` at p=5, `inf` at p=3).
 - Tests share Julia workers via the session-scoped `oracle_factory` fixture in `tests/conftest.py`;
