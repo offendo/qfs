@@ -519,3 +519,65 @@ Share of children at least as high as their parent, by exact parent height, **ex
 - **No policy preserves the height of high parents.** At parent height 6 random single changes keep the height 0.7% of the
   time and the best policies 1.0-1.1%; at heights 7-8 everything is at the random level (0.0-0.4%). The gains over random
   are at parent heights 2-4 (e.g. 68-71% vs 44% at height 2, 7-8% vs 5% at height 4).
+
+---
+
+## E19. Is `q2` robust? Two more seeds, and a high-parent curriculum start with the single-edit init
+
+**Why.** Every headline so far came from one seed, and the factorized recipe lost one seed of three (E11). **What.**
+`q2_single_sf1` (E15) with `--seed 2` and `--seed 3` (`q2_seed2`, `q2_seed3`; `q2_seed1` is the E15 run), and `q4_top`: the
+same with `--curriculum-start 6`. **[choice for `q4`:** since starting at 6 did nothing for the factorized policy (E16) but
+the single-edit SFT init changes the starting point.] 1.5M children each; evaluated together in evaluation G.
+
+Improvement (child score - parent score; higher is better):
+
+| method | ceiling 2 | ceiling 4 | ceiling 6 | ceiling 8 |
+|---|---|---|---|---|
+| random-1 | -0.549 | -1.765 | -3.194 | -4.791 |
+| random-2 | -0.716 | -1.941 | -3.371 | -4.954 |
+| r1_free3 | -0.292 | -1.526 | -2.939 | -4.522 |
+| sf1_single | -0.314 | -1.522 | -2.952 | -4.532 |
+| q2_seed1 | -0.285 | -1.487 | -2.906 | -4.499 |
+| q2_seed2 | -0.264 | -1.485 | -2.915 | -4.506 |
+| q2_seed3 | -0.278 | -1.495 | -2.942 | -4.518 |
+| q4_top | -0.267 | -1.494 | -2.929 | -4.514 |
+
+Share of children at least as high as their parent, by exact parent height (ceiling-8 pool, copies excluded; the
+single-edit policies never copy):
+
+| method | parent 2 | parent 3 | parent 4 | parent 5 | parent 6 | parent 7 | parent 8 |
+|---|---|---|---|---|---|---|---|
+| random-1 | 42.5 | 14.1 | 4.6 | 1.7 | 0.6 | 0.1 | 0.0 |
+| random-2 | 29.0 | 10.5 | 4.0 | 1.1 | 0.4 | 0.1 | 0.0 |
+| r1_free3 | 67.9 | 23.6 | 7.6 | 2.3 | 1.0 | 0.4 | 0.1 |
+| sf1_single | 68.8 | 24.6 | 8.1 | 2.4 | 0.8 | 0.2 | 0.1 |
+| q2_seed1 | 71.9 | 21.8 | 7.9 | 2.5 | 0.8 | 0.3 | 0.1 |
+| q2_seed2 | 67.9 | 22.9 | 7.8 | 2.6 | 0.9 | 0.2 | 0.1 |
+| q2_seed3 | 68.2 | 23.6 | 7.1 | 2.5 | 0.8 | 0.4 | 0.1 |
+| q4_top | 70.1 | 21.9 | 7.8 | 2.7 | 0.9 | 0.3 | 0.1 |
+
+Use of the parent (E17 test): improvement with the policy's own edit, minus improvement with an edit it chose for another
+parent. A larger number means more of the policy's advantage comes from reading its input.
+
+| policy | ceiling 2 | ceiling 4 | ceiling 6 | ceiling 8 |
+|---|---|---|---|---|
+| q2_seed1 | +0.190 | +0.201 | +0.205 | +0.204 |
+| q2_seed2 | +0.141 | +0.139 | +0.129 | +0.141 |
+| q2_seed3 | +0.122 | +0.109 | +0.118 | +0.106 |
+| q4_top | +0.087 | +0.088 | +0.078 | +0.097 |
+
+(In the first run of this test, `q2_seed1` gave +0.197 / +0.195 / +0.213 / +0.198, so the test itself varies by about 0.01.)
+
+**Result and takeaways.**
+- **All three `q2` seeds land in the same band** (ceiling 2: -0.285 / -0.264 / -0.278; ceiling 6: -2.906 / -2.915 / -2.942;
+  ceiling 8: -4.499 / -4.506 / -4.518), none collapsed. Mean of the three: -0.276 / -1.489 / -2.921 / -4.508 at ceilings
+  2 / 4 / 6 / 8, i.e. 0.27-0.28 ahead of random-1, 0.02-0.04 ahead of the SFT policy it started from, and 0.01-0.04 ahead of
+  the best factorized policy. The seed spread (0.02-0.04) is as large as these last two gaps, so they are small but
+  consistent (every seed and ceiling is ahead of `sf1_single`; for `r1_free3` three of the four ceilings show all seeds ahead).
+- Compared with the factorized recipe (one seed of three collapsed), the single-edit SFT-then-RL recipe was stable here.
+  Three seeds is still few.
+- **How much each seed uses the parent differs a lot (+0.09 to +0.20) while the score is the same.** Different RL runs
+  end in different mixes of "a good edit for this parent" and "a good edit in general". `q4_top` has the lowest
+  dependence and the same score.
+- Retention at parent heights 6-8 is at the level of all other policies (0.8-0.9% / 0.2-0.4% / 0.1%): `q2` does not
+  preserve high parents either.
