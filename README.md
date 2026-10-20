@@ -50,6 +50,19 @@ then a polynomial of that level uniformly, so a lower temperature favours higher
 
 Each run writes its model to `runs/<name>/model.pt`.
 
+## Supervised warm start, the single-edit policy and the experiments
+
+- `experiments/count_pairs.py` finds the (parent, one-coefficient child) pairs stored in a heights database
+  (`src/rlmath/pairs.py`; p = 2 or 3).
+- `uv run rlmath-sft --pairs pairs.npz --out sft.pt [--single]` trains the policy to imitate pairs whose child is at least as high
+  as the parent. `rlmath-reinforce --init sft.pt [--kl-coef 0.1]` starts reinforcement learning from it (the model size and
+  `--single` must match).
+- `--single` (in both) samples exactly one (position, new value) pair from a single softmax over the 35 x (p - 1) changes
+  instead of every coefficient independently: no copies, exact log-probability.
+- `experiments/evaluate.py` compares policies and random edits on identical parents; `experiments/parent_dependence.py` tests
+  whether a policy uses its input. The results of the overnight batch are in `experiments-notes.md` (summary) and
+  `experiments/LOG.md` (every experiment), with the key checkpoints in `experiments/checkpoints/`.
+
 ## Debugging the height worker
 
 The worker is an ordinary Julia script, so it can be run by hand. First check that the Julia
