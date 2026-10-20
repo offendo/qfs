@@ -10,8 +10,9 @@ def small_agent(p=3):
 def test_agent_shapes_and_logprob():
     agent = small_agent()
     obs = torch.randint(0, 3, (5, 35))
-    action, logprob, entropy = agent.get_action(obs)
+    action, logprob, entropy, dist = agent.get_action(obs)
     assert action.shape == (5, 35) and ((action >= 0) & (action < 3)).all()
+    assert dist.logits.shape == (5, 35, 3)
     assert logprob.shape == entropy.shape == (5,)
     assert torch.allclose(agent(obs).log_prob(action).sum(-1), logprob)
     assert entropy.min() > 35 * 0.9  # starts close to uniform: 35 * ln 3 ~ 38
@@ -36,7 +37,7 @@ def test_reinforce_raises_a_synthetic_reward():
     obs = torch.randint(0, 3, (256, 35))
 
     def step():
-        action, logprob, _ = agent.get_action(obs)
+        action, logprob, _, _ = agent.get_action(obs)
         reward = (action == 1).float().sum(1)
         adv = reward - reward.mean()
         adv = adv / (adv.std() + 1e-8)

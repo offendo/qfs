@@ -25,7 +25,7 @@ import time
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.distributions import Categorical
+from torch.distributions import Categorical, kl_divergence
 import tyro
 
 from rlmath.env import PolyEnv
@@ -102,7 +102,7 @@ class Agent(nn.Module):
     def get_action(self, obs: torch.Tensor):
         dist = self(obs)
         action = dist.sample()
-        return action, dist.log_prob(action).sum(-1), dist.entropy().sum(-1)
+        return action, dist.log_prob(action).sum(-1), dist.entropy().sum(-1), dist
 
 
 def main(args: Args):
@@ -142,7 +142,8 @@ def main(args: Args):
                 optimizer.param_groups[0]["lr"] = (1.0 - (iteration - 1.0) / num_iterations) * args.learning_rate
 
             # One step of every episode: sample a child for each parent and score it.
-            action, logprob, entropy = agent.get_action(torch.as_tensor(obs, device=device))
+            obs_t = torch.as_tensor(obs, device=device)
+            action, logprob, entropy, dist = agent.get_action(obs_t)
             next_obs, reward, _, _, info = envs.step(action.cpu().numpy())
             child, parent = info["child_score"], info["parent_score"]
 
@@ -158,6 +159,11 @@ def main(args: Args):
             loss.backward()
             grad_norm = nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
             optimizer.step()
+
+            # How far this one step moved the policy on the batch it was computed from: the exact KL
+            # between the policy before and after, summed over the coefficients, per parent.
+            with torch.no_grad():
+                kl = kl_divergence(Categorical(logits=dist.logits.detach()), agent(obs_t)).sum(-1)
 
             best = max(best, int(child.max()))
             global_step = iteration * args.num_envs
@@ -178,6 +184,8 @@ def main(args: Args):
                 "losses/policy_loss": pg_loss.item(),
                 "losses/entropy": entropy.mean().item(),
                 "losses/grad_norm": float(grad_norm),
+                "losses/kl_step": kl.mean().item(),
+                "losses/kl_step_max": kl.max().item(),
             }
             # The same numbers for parents drawn from the pool and for uniformly random ones.
             split = ""
@@ -197,12 +205,12 @@ def main(args: Args):
                 wandb.log(metrics, step=global_step)
             log.info(
                 "iter %d/%d  step %d  reward %+.3f  improvement %+.3f  child %.2f (parent %.2f)  improved %.1f%%  worse %.1f%%  "
-                "hamming %.1f  copied %.1f%%  best %d  pool %d  calls %d  SPS %d%s",
+                "hamming %.1f  copied %.1f%%  best %d  pool %d  calls %d  SPS %d  kl %.4f%s",
                 iteration, num_iterations, global_step, metrics["charts/reward"], metrics["charts/improvement"],
                 metrics["charts/child_score"],
                 metrics["charts/parent_score"], 100 * metrics["charts/improved"], 100 * metrics["charts/worse"],
                 metrics["charts/hamming"], 100 * metrics["charts/copied"], best, len(envs.pool), metrics["charts/oracle_calls"],
-                metrics["charts/SPS"], split,
+                metrics["charts/SPS"], metrics["losses/kl_step"], split,
             )
             if iteration % args.save_every == 0:
                 save()
