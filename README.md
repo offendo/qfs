@@ -108,9 +108,17 @@ coefficient, from those softmaxes. The log-probability of the child is the sum o
 
 **Algorithm.** REINFORCE. Episodes have one step, so each iteration scores `--num-envs` children
 and takes one gradient step on `-(reward - baseline) * log pi(child | parent)`, with no critic.
-The reward contains `-score(parent)`, which depends on the parent alone, so subtracting it
-changes nothing in expectation and only removes noise. The baseline is therefore that term plus the
-batch mean of the rest; in effect the advantage is `(child score - Hamming penalty)` centred on the
-batch mean, divided by its standard deviation. The layout (a dataclass of arguments parsed by
+Each iteration uses `--num-envs / --children-per-parent` parents (default 1024 / 128 = 8) and samples
+`--children-per-parent` independent children for each. The baseline is the mean reward of a parent's
+children, so a child is judged against other edits of the same parent, and the parent's own score,
+which is the same for the whole group, cancels. The advantage is divided by its standard deviation
+over the batch. A group where every child has the same reward contributes no gradient.
+
+**Curriculum.** Pool parents are capped at a height ceiling that starts at `--curriculum-start`
+(default 2; 0 turns the curriculum off). Whenever the share of children at least as high as their
+parent, averaged over the last `--curriculum-window` iterations (20), reaches
+`--curriculum-threshold` (0.25), the ceiling rises by one, up to the cutoff. The ceiling and the
+share of parents for which some child beat the parent (`group_hit_rate`) are logged. Random parents
+are not capped. The layout (a dataclass of arguments parsed by
 `tyro`, optional wandb, one loop) follows CleanRL's scripts, but nothing is imported from it. The
 entropy bonus is off by default (`--ent-coef 0`).

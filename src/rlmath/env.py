@@ -19,7 +19,11 @@ polynomial the environment scores. Parents come from the pool only once it holds
 `parent_db_min_size` polynomials; until then they are all random. Within the pool, a parent's level
 (its score) is chosen with probability proportional to exp(score / parent_temperature), then a
 polynomial of that level uniformly: a lower temperature favours higher scores, and a very high one
-approaches a uniform choice among levels.
+approaches a uniform choice among levels. Pool parents can be capped at `parent_max_height`, which
+the training script raises as a curriculum.
+
+Each parent is used for `children_per_parent` consecutive episodes, so a batch holds
+num_envs / children_per_parent distinct parents, each repeated.
 """
 
 import logging
@@ -74,12 +78,17 @@ class ParentPool:
             self.coeffs[n], self.scores[n] = row, s
             self.keys.add(k)
 
-    def sample(self, rng: np.random.Generator, count: int, temperature: float) -> tuple[np.ndarray, np.ndarray]:
+    def sample(
+        self, rng: np.random.Generator, count: int, temperature: float, max_score: int | None = None
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Sample `count` polynomials with score at most `max_score` (or the lowest score present, if that is higher)."""
         scores = self.scores[: len(self)]
-        counts = np.bincount(scores)
-        level_weight = np.exp((np.arange(len(counts)) - scores.max()) / temperature) * (counts > 0)
-        weight = level_weight[scores] / counts[scores]  # level first, then uniform within the level
-        pick = rng.choice(len(scores), size=count, p=weight / weight.sum())
+        allowed = np.arange(len(scores)) if max_score is None else np.flatnonzero(scores <= max(max_score, scores.min()))
+        s = scores[allowed]
+        counts = np.bincount(s)
+        level_weight = np.exp((np.arange(len(counts)) - s.max()) / temperature) * (counts > 0)
+        weight = level_weight[s] / counts[s]  # level first, then uniform within the level
+        pick = allowed[rng.choice(len(s), size=count, p=weight / weight.sum())]
         return self.coeffs[pick].astype(np.int64), scores[pick]
 
 
@@ -101,8 +110,14 @@ class PolyEnv(gym.vector.VectorEnv):
         parent_min_height: int = 2,  # a polynomial needs at least this score to enter the pool
         parent_db_min_size: int = 1000,  # parents are all random until the pool has this many polynomials
         parent_temperature: float = 3.0,  # pool parents: P(level s) ~ exp(s / this); lower favours higher scores
+        parent_max_height: int | None = None,  # pool parents have at most this score (can be changed during a run)
+        children_per_parent: int = 1,  # consecutive episodes that share a parent
         seed: int = 0,
     ):
+        if num_envs % children_per_parent:
+            raise ValueError("num_envs must be a multiple of children_per_parent")
+        self.children_per_parent = children_per_parent
+        self.parent_max_height = parent_max_height
         self.num_envs = num_envs
         self.p, self.n, self.d = p, n, d
         self.cutoff, self.infinite_score = cutoff, infinite_score
@@ -157,17 +172,21 @@ class PolyEnv(gym.vector.VectorEnv):
 
     def _sample_parents(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Parents, their scores, and whether each came from the pool (else it is uniformly random)."""
-        parents = random_polys(self.rng, self.num_envs, self.p, self.n, self.d)
-        scores = np.zeros(self.num_envs, dtype=np.int64)
+        groups = self.num_envs // self.children_per_parent
+        parents = random_polys(self.rng, groups, self.p, self.n, self.d)
+        scores = np.zeros(groups, dtype=np.int64)
         n_pool = 0
         if self.parent_db_frac and len(self.pool) >= self.parent_db_min_size:
-            n_pool = int(self.rng.binomial(self.num_envs, self.parent_db_frac))
+            n_pool = int(self.rng.binomial(groups, self.parent_db_frac))
         if n_pool:
-            parents[:n_pool], scores[:n_pool] = self.pool.sample(self.rng, n_pool, self.parent_temperature)
-        if n_pool < self.num_envs:
+            parents[:n_pool], scores[:n_pool] = self.pool.sample(
+                self.rng, n_pool, self.parent_temperature, self.parent_max_height
+            )
+        if n_pool < groups:
             scores[n_pool:] = self._score(parents[n_pool:])
             self._remember(parents[n_pool:], scores[n_pool:])
-        return parents, scores, np.arange(self.num_envs) < n_pool
+        repeat = lambda x: np.repeat(x, self.children_per_parent, axis=0)
+        return repeat(parents), repeat(scores), repeat(np.arange(groups) < n_pool)
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         if seed is not None:

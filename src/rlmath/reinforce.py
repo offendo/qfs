@@ -8,10 +8,14 @@ is their sum. `rlmath.env.PolyEnv` returns the reward.
 Episodes have one step, so the gradient is just  -(reward - baseline) * log pi(child | parent),
 averaged over the batch, with one update per batch of fresh samples.
 
-Baseline: the reward contains -score(parent), which depends on the parent alone. Subtracting any
-function of the parent leaves the gradient unbiased, so the baseline here is that term plus the
-batch mean of the rest. This is the same as using (child score - Hamming penalty), centred on the
-batch mean; the parent's score only added noise.
+Each parent gets `children_per_parent` independent children, and the baseline is the mean reward of
+that group, so a child is judged against other edits of the same parent. The reward contains
+-score(parent), which is the same for the whole group and cancels. (With one child per parent the
+baseline is the batch mean of the reward plus score(parent), which removes the same term.)
+
+Curriculum: pool parents are capped at a height ceiling that starts at `curriculum_start` and rises by
+one whenever the share of children that are at least as high as their parent, averaged over the last
+`curriculum_window` iterations, reaches `curriculum_threshold`.
 
     uv run rlmath-reinforce --p 5 --total-timesteps 1000000 --track
 """
@@ -60,10 +64,14 @@ class Args:
     parent_min_height: int = 2  # ... that have at least this height
     parent_db_min_size: int = 1000  # parents are all random until the pool holds this many polynomials
     parent_temperature: float = 3.0  # pool parents: P(height level) ~ exp(height / this); lower favours higher
+    curriculum_start: int = 2  # initial ceiling on the height of pool parents (0 = no curriculum)
+    curriculum_threshold: float = 0.25  # raise the ceiling when this share of children are >= their parent
+    curriculum_window: int = 20  # ... averaged over this many iterations
 
     # algorithm
     total_timesteps: int = 1_000_000  # children scored
-    num_envs: int = 1024  # children scored per iteration (one parent each)
+    num_envs: int = 1024  # children scored per iteration
+    children_per_parent: int = 128  # children sampled for each parent (num_envs / this parents per iteration)
     learning_rate: float = 3e-4
     anneal_lr: bool = True
     norm_adv: bool = True  # divide the advantages by their standard deviation
@@ -105,6 +113,25 @@ class Agent(nn.Module):
         return action, dist.log_prob(action).sum(-1), dist.entropy().sum(-1), dist
 
 
+def group_advantages(reward: torch.Tensor, group: int, norm: bool) -> torch.Tensor:
+    """Reward minus the mean reward of its group (consecutive rows), divided by the batch std if `norm`.
+
+    With a group of one child there is nothing to compare against, so the batch mean is used instead.
+    """
+    adv = reward.view(-1, group)
+    adv = (adv - adv.mean(dim=1, keepdim=True)).reshape(-1) if group > 1 else (reward - reward.mean())
+    return adv / (adv.std() + 1e-8) if norm else adv
+
+
+def update_curriculum(ceiling: int, successes: list, success: float, window: int, threshold: float, cutoff: int) -> int:
+    """Record this iteration's success rate; raise the ceiling by one when the last `window` average reaches `threshold`."""
+    successes.append(success)
+    if len(successes) >= window and np.mean(successes[-window:]) >= threshold and ceiling < cutoff:
+        successes.clear()
+        return ceiling + 1
+    return ceiling
+
+
 def main(args: Args):
     run_name = f"p{args.p}__{args.exp_name}__{args.seed}__{int(time.time())}"
     out = Path(args.out or f"runs/{run_name}")
@@ -123,7 +150,8 @@ def main(args: Args):
         args.num_envs, args.p, args.n, args.d, cutoff=args.cutoff, infinite_score=args.infinite_score,
         hamming_penalty=args.hamming_penalty, hamming_free=args.hamming_free, copy_penalty=args.copy_penalty, workers=args.workers, db=args.db,
         parent_db_frac=args.parent_db_frac, parent_min_height=args.parent_min_height,
-        parent_db_min_size=args.parent_db_min_size, parent_temperature=args.parent_temperature, seed=args.seed,
+        parent_db_min_size=args.parent_db_min_size, parent_temperature=args.parent_temperature,
+        parent_max_height=args.curriculum_start or None, children_per_parent=args.children_per_parent, seed=args.seed,
     )
     agent = Agent(args.p, args.n, args.d, args.d_model, args.n_layers, args.n_heads, args.d_ff).to(device)
     optimizer = torch.optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
@@ -134,6 +162,8 @@ def main(args: Args):
         torch.save({"args": asdict(args), "model": agent.state_dict()}, out / "model.pt")
 
     best = 0
+    ceiling = args.curriculum_start  # 0 = no curriculum
+    successes = []
     start = time.time()
     obs, _ = envs.reset(seed=args.seed)
     try:
@@ -147,11 +177,9 @@ def main(args: Args):
             next_obs, reward, _, _, info = envs.step(action.cpu().numpy())
             child, parent = info["child_score"], info["parent_score"]
 
-            # REINFORCE with the baseline described at the top of the file.
-            advantages = torch.as_tensor(reward + parent, dtype=torch.float32, device=device)
-            advantages = advantages - advantages.mean()
-            if args.norm_adv:
-                advantages = advantages / (advantages.std() + 1e-8)
+            # REINFORCE with the group baseline described at the top of the file.
+            shaped = torch.as_tensor(reward + parent, dtype=torch.float32, device=device)
+            advantages = group_advantages(shaped, args.children_per_parent, args.norm_adv)
             pg_loss = -(advantages * logprob).mean()
             loss = pg_loss - args.ent_coef * entropy.mean()
 
@@ -165,7 +193,15 @@ def main(args: Args):
             with torch.no_grad():
                 kl = kl_divergence(Categorical(logits=dist.logits.detach()), agent(obs_t)).sum(-1)
 
+            if ceiling and info["from_pool"].any():
+                ceiling = update_curriculum(
+                    ceiling, successes, float((child >= parent)[info["from_pool"]].mean()),
+                    args.curriculum_window, args.curriculum_threshold, args.cutoff,
+                )
+                envs.parent_max_height = ceiling
+
             best = max(best, int(child.max()))
+            hit = float((child > parent).reshape(-1, args.children_per_parent).any(axis=1).mean())
             global_step = iteration * args.num_envs
             metrics = {
                 "charts/reward": float(reward.mean()),
@@ -174,6 +210,8 @@ def main(args: Args):
                 "charts/worse": float((child < parent).mean()),
                 "charts/hamming": float(info["hamming"].mean()),
                 "charts/copied": float((info["hamming"] == 0).mean()),
+                "charts/group_hit_rate": hit,  # share of parents for which some child beat the parent
+                "charts/parent_ceiling": ceiling,
                 "charts/child_score": float(child.mean()),
                 "charts/parent_score": float(parent.mean()),
                 "charts/best_child_score": best,
@@ -205,12 +243,12 @@ def main(args: Args):
                 wandb.log(metrics, step=global_step)
             log.info(
                 "iter %d/%d  step %d  reward %+.3f  improvement %+.3f  child %.2f (parent %.2f)  improved %.1f%%  worse %.1f%%  "
-                "hamming %.1f  copied %.1f%%  best %d  pool %d  calls %d  SPS %d  kl %.4f%s",
+                "hamming %.1f  copied %.1f%%  best %d  pool %d  calls %d  SPS %d  kl %.4f  ceil %d  hit %.0f%%%s",
                 iteration, num_iterations, global_step, metrics["charts/reward"], metrics["charts/improvement"],
                 metrics["charts/child_score"],
                 metrics["charts/parent_score"], 100 * metrics["charts/improved"], 100 * metrics["charts/worse"],
                 metrics["charts/hamming"], 100 * metrics["charts/copied"], best, len(envs.pool), metrics["charts/oracle_calls"],
-                metrics["charts/SPS"], metrics["losses/kl_step"], split,
+                metrics["charts/SPS"], metrics["losses/kl_step"], ceiling, 100 * hit, split,
             )
             if iteration % args.save_every == 0:
                 save()

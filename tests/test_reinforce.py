@@ -1,6 +1,6 @@
 import torch
 
-from rlmath.reinforce import Agent, Args, main
+from rlmath.reinforce import Agent, Args, group_advantages, main, update_curriculum
 
 
 def small_agent(p=3):
@@ -51,3 +51,35 @@ def test_reinforce_raises_a_synthetic_reward():
     for _ in range(60):
         step()
     assert step() > first + 10  # 35 coefficients at chance gives ~11.7; it should approach 35
+
+
+def test_group_advantages():
+    reward = torch.tensor([1.0, 3.0, 10.0, 10.0, 0.0, 4.0])
+    adv = group_advantages(reward, group=2, norm=False)
+    assert torch.allclose(adv, torch.tensor([-1.0, 1.0, 0.0, 0.0, -2.0, 2.0]))  # centred within each pair
+    scaled = group_advantages(reward, group=2, norm=True)
+    assert abs(scaled.std().item() - 1) < 1e-3
+    single = group_advantages(reward, group=1, norm=False)
+    assert torch.allclose(single, reward - reward.mean())  # no group to compare with: the batch mean
+
+
+def test_curriculum_raises_the_ceiling_after_a_good_window():
+    successes = []
+    ceiling = 2
+    for _ in range(4):
+        ceiling = update_curriculum(ceiling, successes, 0.1, window=4, threshold=0.25, cutoff=10)
+    assert ceiling == 2  # success rate too low
+    for _ in range(2):  # window is now [0.1, 0.1, 0.5, 0.5]: mean 0.3 >= 0.25
+        ceiling = update_curriculum(ceiling, successes, 0.5, window=4, threshold=0.25, cutoff=10)
+    assert ceiling == 3 and successes == []  # raised once, and the window restarts
+    assert update_curriculum(10, [0.9] * 4, 0.9, window=4, threshold=0.25, cutoff=10) == 10  # never past the cutoff
+
+
+def test_short_run_with_groups_and_curriculum(tmp_path):
+    args = Args(
+        p=3, total_timesteps=512, num_envs=64, children_per_parent=8, workers=2, cuda=False, out=str(tmp_path),
+        db=str(tmp_path / "heights.sqlite"), parent_db_frac=1.0, parent_db_min_size=10, curriculum_start=2,
+        curriculum_window=2, curriculum_threshold=0.0, d_model=32, n_layers=2, n_heads=4, d_ff=64,
+    )
+    main(args)
+    assert (tmp_path / "model.pt").exists()

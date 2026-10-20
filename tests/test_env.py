@@ -127,3 +127,37 @@ def test_hamming_penalty_has_a_free_budget(tmp_path):
     assert np.allclose(reward[:32], gain[:32])
     assert np.allclose(reward[32:], gain[32:] - 1.0)
     env.close()
+
+
+def test_children_share_a_parent_within_a_group(tmp_path):
+    env = PolyEnv(num_envs=48, p=3, workers=2, db=str(tmp_path / "heights.sqlite"), children_per_parent=8)
+    obs, _ = env.reset(seed=0)
+    groups = obs.reshape(6, 8, 35)
+    assert (groups == groups[:, :1]).all()  # the 8 rows of a group are the same parent
+    assert len({tuple(g[0]) for g in groups}) > 1  # different groups have different parents
+    _, reward, _, _, info = env.step(env.action_space.sample())
+    assert (info["parent_score"].reshape(6, 8) == info["parent_score"].reshape(6, 8)[:, :1]).all()
+    env.close()
+    try:
+        PolyEnv(num_envs=50, p=3, workers=1, children_per_parent=8)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("num_envs not divisible by children_per_parent should be rejected")
+
+
+def test_parent_max_height_caps_pool_parents(tmp_path):
+    env = PolyEnv(
+        num_envs=64, p=3, workers=2, db=str(tmp_path / "heights.sqlite"), parent_db_frac=1.0, parent_db_min_size=30,
+        parent_max_height=3,
+    )
+    env.reset(seed=0)
+    for _ in range(8):
+        env.step(env.action_space.sample())
+    assert env.from_pool.all() and len(env.pool) >= 30
+    assert (env.pool.scores[: len(env.pool)] > 3).any()  # there are higher polynomials in the pool...
+    assert env.parent_scores.max() <= 3  # ...but they are not used as parents
+    env.parent_max_height = None
+    seen = max(env.parent_scores.max(), *(env.step(env.action_space.sample())[4]["parent_score"].max() for _ in range(15)))
+    assert seen > 3  # lifting the cap makes them available
+    env.close()
