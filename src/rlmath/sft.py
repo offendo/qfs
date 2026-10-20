@@ -40,6 +40,7 @@ class Args:
     warmup_steps: int = 200
     holdout: float = 0.02  # share of parents kept out to measure the loss on
     augment: bool = True  # rename the variables at random (the same way for parent and child)
+    single: bool = False  # train the single-edit policy (rlmath-reinforce --single); the pairs are single changes
     seed: int = 1
     cuda: bool = True
     d_model: int = 128
@@ -89,7 +90,7 @@ def main(args: Args):
             obs, child = obs.gather(1, sigma), child.gather(1, sigma)
         return obs, child
 
-    agent = Agent(args.p, args.n, args.d, args.d_model, args.n_layers, args.n_heads, args.d_ff).to(device)
+    agent = Agent(args.p, args.n, args.d, args.d_model, args.n_layers, args.n_heads, args.d_ff, args.single).to(device)
     optimizer = torch.optim.AdamW(agent.parameters(), lr=args.learning_rate, weight_decay=0.0)
     steps_per_epoch = max(1, len(train) // args.batch_size)
     total = steps_per_epoch * args.epochs
@@ -105,10 +106,10 @@ def main(args: Args):
         with torch.no_grad():
             for chunk in torch.as_tensor(test, device=device).split(4096):
                 obs, child = batch(chunk, augment=False)
-                dist = agent(obs)
-                nll.append(-dist.log_prob(child).sum(-1))
-                # probability the model gives to each coefficient changing at all (how "edit-like" it is)
-                mass_changed.append(1 - dist.probs.gather(-1, obs.unsqueeze(-1)).squeeze(-1).prod(-1))
+                nll.append(-agent.child_log_prob(obs, child))
+                # probability the model gives to some coefficient changing at all (how "edit-like" it is)
+                keep = agent(obs).probs.gather(-1, obs.unsqueeze(-1)).squeeze(-1).prod(-1)
+                mass_changed.append(torch.ones_like(keep) if args.single else 1 - keep)
         return torch.cat(nll).mean().item(), torch.cat(mass_changed).mean().item()
 
     train_t = torch.as_tensor(train, device=device)
@@ -121,7 +122,7 @@ def main(args: Args):
             for g in optimizer.param_groups:
                 g["lr"] = lr_at(step)
             obs, child = batch(idx, args.augment)
-            loss = -agent(obs).log_prob(child).sum(-1).mean()
+            loss = -agent.child_log_prob(obs, child).mean()
             optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(agent.parameters(), 1.0)

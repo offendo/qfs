@@ -30,7 +30,8 @@ import time
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.distributions import Categorical, kl_divergence
+import torch.nn.functional as F
+from torch.distributions import Categorical
 import tyro
 
 from rlmath.env import PolyEnv
@@ -79,6 +80,9 @@ class Args:
     ent_coef: float = 0.0  # entropy is summed over the coefficients
     max_grad_norm: float = 0.5
 
+    # policy class
+    single: bool = False  # change exactly one coefficient: sample one (position, new value) pair from a single softmax
+
     # starting point
     init: str = ""  # checkpoint to start from (a model.pt, or one written by rlmath-sft); its model size must match
     kl_coef: float = 0.0  # penalty on KL(policy || the policy at the start), summed over coefficients; needs init
@@ -91,8 +95,14 @@ class Args:
 
 
 class Agent(nn.Module):
-    def __init__(self, p: int, n: int, d: int, d_model: int, n_layers: int, n_heads: int, d_ff: int):
+    """Parent in, child out. By default the child is sampled coefficient by coefficient; with `single` it differs
+    from the parent in exactly one coefficient, chosen with one softmax over the (position, new value) pairs."""
+
+    def __init__(
+        self, p: int, n: int, d: int, d_model: int, n_layers: int, n_heads: int, d_ff: int, single: bool = False
+    ):
         super().__init__()
+        self.p, self.single = p, single
         self.register_buffer("exponents", torch.as_tensor(monomials(n, d)), persistent=False)
         self.coeff_emb = nn.Embedding(p, d_model)
         # One table per variable, indexed by exponent; a monomial's embedding is the sum over its variables.
@@ -112,10 +122,41 @@ class Agent(nn.Module):
         h = self.norm(self.encoder(self.coeff_emb(obs) + mono))
         return Categorical(logits=self.actor(h))
 
-    def get_action(self, obs: torch.Tensor):
+    def policy(self, obs: torch.Tensor) -> Categorical:
+        """The distribution the child is drawn from: per coefficient, or (with `single`) one over all
+        (position, new value) pairs, where position * p + value indexes the pair and keeping a value is not allowed."""
         dist = self(obs)
-        action = dist.sample()
-        return action, dist.log_prob(action).sum(-1), dist.entropy().sum(-1), dist
+        if not self.single:
+            return dist
+        logits = dist.logits.masked_fill(F.one_hot(obs, self.p).bool(), float("-inf"))
+        return Categorical(logits=logits.reshape(len(obs), -1))
+
+    def get_action(self, obs: torch.Tensor):
+        dist = self.policy(obs)
+        sample = dist.sample()
+        if not self.single:
+            return sample, dist.log_prob(sample).sum(-1), dist.entropy().sum(-1), dist
+        child = obs.clone()
+        child[torch.arange(len(obs), device=obs.device), sample // self.p] = sample % self.p
+        # entropy() would multiply the masked -inf logits by their zero probability, which gives NaN gradients
+        entropy = -(dist.probs * dist.logits.clamp(min=-1e4)).sum(-1)
+        return child, dist.log_prob(sample), entropy, dist
+
+    def child_log_prob(self, obs: torch.Tensor, child: torch.Tensor) -> torch.Tensor:
+        """Log-probability of `child` given `obs`. With `single`, child must differ from obs in exactly one coefficient."""
+        dist = self.policy(obs)
+        if not self.single:
+            return dist.log_prob(child).sum(-1)
+        changed = child != obs
+        pos = changed.float().argmax(dim=1)
+        return dist.log_prob(pos * self.p + child[torch.arange(len(obs), device=obs.device), pos])
+
+
+def policy_kl(p: Categorical, q: Categorical) -> torch.Tensor:
+    """KL(p || q) per parent: summed over the coefficients when the distributions are per coefficient."""
+    # not torch's kl_divergence: where both distributions rule a value out it gives NaN gradients
+    kl = (p.probs * (p.logits.clamp(min=-1e4) - q.logits.clamp(min=-1e4))).sum(-1)
+    return kl.sum(-1) if kl.dim() > 1 else kl
 
 
 def group_advantages(reward: torch.Tensor, group: int, norm: bool) -> torch.Tensor:
@@ -158,13 +199,13 @@ def main(args: Args):
         parent_db_min_size=args.parent_db_min_size, parent_temperature=args.parent_temperature,
         parent_max_height=args.curriculum_start or None, children_per_parent=args.children_per_parent, seed=args.seed,
     )
-    agent = Agent(args.p, args.n, args.d, args.d_model, args.n_layers, args.n_heads, args.d_ff).to(device)
+    agent = Agent(args.p, args.n, args.d, args.d_model, args.n_layers, args.n_heads, args.d_ff, args.single).to(device)
     ref = None
     if args.init:
         ckpt = torch.load(args.init, map_location=device)
-        for k in ("p", "n", "d", "d_model", "n_layers", "n_heads", "d_ff"):
-            if ckpt["args"][k] != getattr(args, k):
-                raise ValueError(f"--init was trained with {k}={ckpt['args'][k]}, this run has {k}={getattr(args, k)}")
+        for k in ("p", "n", "d", "d_model", "n_layers", "n_heads", "d_ff", "single"):
+            if ckpt["args"].get(k, False if k == "single" else None) != getattr(args, k):
+                raise ValueError(f"--init was trained with {k}={ckpt['args'].get(k)}, this run has {k}={getattr(args, k)}")
         agent.load_state_dict(ckpt["model"])
         if args.kl_coef:
             ref = copy.deepcopy(agent).requires_grad_(False)
@@ -201,8 +242,8 @@ def main(args: Args):
             kl_ref = torch.zeros((), device=device)
             if ref is not None:
                 with torch.no_grad():
-                    ref_dist = ref(obs_t)
-                kl_ref = kl_divergence(dist, ref_dist).sum(-1).mean()
+                    ref_dist = ref.policy(obs_t)
+                kl_ref = policy_kl(dist, ref_dist).mean()
                 loss = loss + args.kl_coef * kl_ref
 
             optimizer.zero_grad()
@@ -213,7 +254,7 @@ def main(args: Args):
             # How far this one step moved the policy on the batch it was computed from: the exact KL
             # between the policy before and after, summed over the coefficients, per parent.
             with torch.no_grad():
-                kl = kl_divergence(Categorical(logits=dist.logits.detach()), agent(obs_t)).sum(-1)
+                kl = policy_kl(Categorical(logits=dist.logits.detach()), agent.policy(obs_t))
 
             if ceiling and info["from_pool"].any():
                 ceiling = update_curriculum(

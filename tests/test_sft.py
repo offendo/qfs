@@ -63,3 +63,25 @@ def test_sft_learns_a_fixed_edit_and_feeds_reinforce(tmp_path):
         db=str(tmp_path / "heights.sqlite"), init=out, kl_coef=0.05, **SMALL,
     ))
     assert (tmp_path / "rl" / "model.pt").exists()
+
+
+def test_single_edit_sft_learns_a_fixed_edit(tmp_path):
+    rng = np.random.default_rng(2)
+    digits = rng.integers(0, 3, size=(200, 35)).astype(np.uint8)
+    new = ((digits[:, 7] + 1) % 3).astype(np.int8)
+    Pairs(digits, np.arange(200, dtype=np.int32), np.full(200, 7, dtype=np.int8), new, np.full(200, 3, dtype=np.int16),
+          np.full(200, 3, dtype=np.int16)).save(str(tmp_path / "pairs.npz"))
+    out = str(tmp_path / "sft.pt")
+    main(Args(pairs=str(tmp_path / "pairs.npz"), out=out, epochs=200, batch_size=64, learning_rate=1e-3, holdout=0.0,
+              augment=False, cuda=False, single=True, **SMALL))
+    from rlmath.reinforce import Agent
+
+    ckpt = torch.load(out)
+    assert ckpt["args"]["single"] is True
+    agent = Agent(3, 4, 4, single=True, **SMALL)
+    agent.load_state_dict(ckpt["model"])
+    obs = torch.as_tensor(digits[:50]).long()
+    child = obs.clone()
+    child[:, 7] = torch.as_tensor(new[:50]).long()
+    with torch.no_grad():
+        assert agent.child_log_prob(obs, child).exp().mean() > 0.6  # the learned edit has most of the probability

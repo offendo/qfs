@@ -22,7 +22,7 @@ from rlmath.reinforce import Agent
 def load_agent(path: str, device) -> Agent:
     ckpt = torch.load(path, map_location=device)
     a = ckpt["args"]
-    agent = Agent(a["p"], a["n"], a["d"], a["d_model"], a["n_layers"], a["n_heads"], a["d_ff"]).to(device)
+    agent = Agent(a["p"], a["n"], a["d"], a["d_model"], a["n_layers"], a["n_heads"], a["d_ff"], a.get("single", False)).to(device)
     agent.load_state_dict(ckpt["model"])
     return agent.eval()
 
