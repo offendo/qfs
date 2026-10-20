@@ -15,7 +15,10 @@ from a pool of smooth polynomials of height at least `parent_min_height` (at lea
 height that is checked for smoothness). The pool starts with the ones already saved in the SQLite
 file `db` (see rlmath.store), read once when the environment is created, and grows with every such
 polynomial the environment scores. Parents come from the pool only once it holds at least
-`parent_db_min_size` polynomials; until then they are all random.
+`parent_db_min_size` polynomials; until then they are all random. Within the pool, a parent's level
+(its score) is chosen with probability proportional to exp(score / parent_temperature), then a
+polynomial of that level uniformly: a lower temperature favours higher scores, and a very high one
+approaches a uniform choice among levels.
 """
 
 import logging
@@ -70,9 +73,13 @@ class ParentPool:
             self.coeffs[n], self.scores[n] = row, s
             self.keys.add(k)
 
-    def sample(self, rng: np.random.Generator, count: int) -> tuple[np.ndarray, np.ndarray]:
-        pick = rng.integers(len(self), size=count)
-        return self.coeffs[pick].astype(np.int64), self.scores[pick]
+    def sample(self, rng: np.random.Generator, count: int, temperature: float) -> tuple[np.ndarray, np.ndarray]:
+        scores = self.scores[: len(self)]
+        counts = np.bincount(scores)
+        level_weight = np.exp((np.arange(len(counts)) - scores.max()) / temperature) * (counts > 0)
+        weight = level_weight[scores] / counts[scores]  # level first, then uniform within the level
+        pick = rng.choice(len(scores), size=count, p=weight / weight.sum())
+        return self.coeffs[pick].astype(np.int64), scores[pick]
 
 
 class PolyEnv(gym.vector.VectorEnv):
@@ -91,6 +98,7 @@ class PolyEnv(gym.vector.VectorEnv):
         parent_db_frac: float = 0.0,  # fraction of parents drawn from the pool, once it is big enough
         parent_min_height: int = 2,  # a polynomial needs at least this score to enter the pool
         parent_db_min_size: int = 1000,  # parents are all random until the pool has this many polynomials
+        parent_temperature: float = 3.0,  # pool parents: P(level s) ~ exp(s / this); lower favours higher scores
         seed: int = 0,
     ):
         self.num_envs = num_envs
@@ -109,6 +117,9 @@ class PolyEnv(gym.vector.VectorEnv):
         self.oracle = HeightOracle(p, n, d, cutoff, workers=workers or None, db=db or None)
         self.parent_db_frac, self.parent_min_height = parent_db_frac, parent_min_height
         self.parent_db_min_size = max(1, parent_db_min_size)
+        if parent_temperature <= 0:
+            raise ValueError("parent_temperature must be positive")
+        self.parent_temperature = parent_temperature
         self.pool = ParentPool(m)
         if parent_db_frac and db:
             self._load_db(db)
@@ -149,7 +160,7 @@ class PolyEnv(gym.vector.VectorEnv):
         if self.parent_db_frac and len(self.pool) >= self.parent_db_min_size:
             n_pool = int(self.rng.binomial(self.num_envs, self.parent_db_frac))
         if n_pool:
-            parents[:n_pool], scores[:n_pool] = self.pool.sample(self.rng, n_pool)
+            parents[:n_pool], scores[:n_pool] = self.pool.sample(self.rng, n_pool, self.parent_temperature)
         if n_pool < self.num_envs:
             scores[n_pool:] = self._score(parents[n_pool:])
             self._remember(parents[n_pool:], scores[n_pool:])

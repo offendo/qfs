@@ -89,3 +89,23 @@ def test_pool_is_not_used_when_no_fraction_is_set(tmp_path):
         env.step(env.action_space.sample())
     assert len(env.pool) == 0
     env.close()
+
+
+def test_pool_sampling_favours_higher_scores():
+    from rlmath.env import ParentPool
+
+    pool = ParentPool(35)
+    rng = np.random.default_rng(0)
+    low = rng.integers(0, 3, size=(500, 35))
+    high = rng.integers(0, 3, size=(20, 35))
+    pool.add(low, np.full(500, 2), 3)
+    pool.add(high, np.full(20, 6), 3)
+    assert set(pool.scores[: len(pool)]) == {2, 6}
+
+    def share_high(temperature):
+        _, scores = pool.sample(rng, 4000, temperature)
+        return (scores == 6).mean()
+
+    assert share_high(1.0) > 0.95  # exp(4) = 55 to 1 in favour of the high level
+    assert 0.4 < share_high(1e6) < 0.6  # equal weight per level, although the high level has 25x fewer polynomials
+    assert share_high(1.0) > share_high(3.0) > share_high(1e6)
