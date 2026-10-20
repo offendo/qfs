@@ -11,6 +11,11 @@ polynomial; a singular or zero polynomial scores 0, so it is never worth produci
 height oracle. Every episode ends after its single step, so `step` returns the next episodes'
 parents as the observation, and `reset` is only needed to start (and to reseed).
 
+Every child the environment has scored is remembered (up to scaling) in a set that starts empty with each run, and
+a child already in it is a repeat. With `repeat_penalty > 0` a repeat earns `-repeat_penalty` instead of its
+improvement, so only the first sighting of a polynomial is rewarded (a repeat inside one batch counts too: the first
+copy is new, the rest are repeats). With `repeat_penalty = 0` repeats are only counted.
+
 Parents are uniformly random polynomials, except for a fraction `parent_db_frac` that are drawn
 from a pool of smooth polynomials of height at least `parent_min_height` (at least 2, the lowest
 height that is checked for smoothness). The pool starts with the ones already saved in the SQLite
@@ -104,6 +109,7 @@ class PolyEnv(gym.vector.VectorEnv):
         hamming_penalty: float = 0.0,  # reward lost per coefficient changed beyond hamming_free
         hamming_free: int = 0,  # number of coefficients the child may change without penalty
         copy_penalty: float = 0.0,  # reward lost when the child is exactly the parent
+        repeat_penalty: float = 0.0,  # reward of a child already seen this run is -repeat_penalty (0 = no change)
         workers: int = 0,  # Julia worker processes (0 = number of CPUs - 1)
         db: str = "",  # SQLite file every scored polynomial is saved to, and parents are read from
         parent_db_frac: float = 0.0,  # fraction of parents drawn from the pool, once it is big enough
@@ -122,6 +128,8 @@ class PolyEnv(gym.vector.VectorEnv):
         self.p, self.n, self.d = p, n, d
         self.cutoff, self.infinite_score = cutoff, infinite_score
         self.hamming_penalty, self.hamming_free, self.copy_penalty = hamming_penalty, hamming_free, copy_penalty
+        self.repeat_penalty = repeat_penalty
+        self.seen: set[bytes] = set()  # scaled children scored so far in this run
         # For quartic K3 surfaces a chain that runs past the cutoff is supersingular.
         self.past_cutoff_is_infinite = n == 4 and d == 4 and cutoff >= 10
         m = len(monomials(n, d))
@@ -200,11 +208,18 @@ class PolyEnv(gym.vector.VectorEnv):
         self._remember(children, child_scores)
         hamming = (children != self.parents).sum(axis=1)
         copied = hamming == 0
+        repeated = np.zeros(self.num_envs, dtype=bool)
+        for i, row in enumerate(normalize(children, self.p).astype(np.uint8)):
+            k = row.tobytes()
+            repeated[i] = k in self.seen
+            self.seen.add(k)
         too_far = np.maximum(hamming - self.hamming_free, 0)
         reward = child_scores - self.parent_scores - self.hamming_penalty * too_far - self.copy_penalty * copied
+        if self.repeat_penalty:
+            reward = np.where(repeated, -self.repeat_penalty - self.copy_penalty * copied, reward)
         info = {
             "parent_score": self.parent_scores, "child_score": child_scores, "hamming": hamming,
-            "from_pool": self.from_pool,
+            "from_pool": self.from_pool, "repeated": repeated,
         }
         reward = reward.astype(np.float32)
         self.parents, self.parent_scores, self.from_pool = self._sample_parents()

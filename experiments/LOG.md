@@ -581,3 +581,41 @@ parent. A larger number means more of the policy's advantage comes from reading 
   dependence and the same score.
 - Retention at parent heights 6-8 is at the level of all other policies (0.8-0.9% / 0.2-0.4% / 0.1%): `q2` does not
   preserve high parents either.
+
+---
+
+## E20. Repeat penalty instead of a Hamming penalty (new-polynomial discovery)
+
+**Why.** Idea from the user: drop the Hamming penalty, keep a high copy penalty, and give a child that was already generated
+earlier in the run no reward. **What (implemented in `PolyEnv`, flag `--repeat-penalty`).** The seen set is a hash set of
+scaled children, empty at the start of each run (the database is *not* used for it; the parent pool still comes from the
+database). A repeat (earlier step, or an earlier copy in the same batch) gets reward `-repeat_penalty` instead of its
+improvement; the first sighting keeps `child - parent`. **[choices:** flat -10, not 0, because 0 would beat an unseen
+low-height child (its improvement is usually negative) and pay the policy to repeat; no Hamming penalty; copy penalty 100.**]**
+The old "improvement over the parent" metric does not fit large edits, so the runs are compared by **new (first-seen)
+children of height >= 6 / >= 8 per 1024 children**, logged as `charts/new_ge6`, `charts/new_ge8`, plus `charts/repeated`.
+The untrained policy's rate (first quarter of `n0`) is the reference: 2.5 / 0.27 per 1024. 1.5M children each, p = 3.
+
+| run | setup | share repeated (last quarter) | new>=6 per 1024 (first -> last quarter) | new>=8 per 1024 | total new>=6 / >=8 |
+|---|---|---|---|---|---|
+| `n0_norepeat` | factorized, scratch, no repeat penalty (control) | 100% | 2.5 -> 0.0 | 0.27 -> 0.00 | 2034 / 211 |
+| `n1_repeat` | factorized, scratch, repeat 10 | 0.1% | 2.5 -> 2.8 | 0.27 -> 0.29 | 3977 / 403 |
+| `n3_repeat_nocurriculum` | as `n1`, curriculum off (parents average height 8) | 0.6% | 2.6 -> 2.9 | 0.31 -> 0.28 | 4087 / 440 |
+| `n2_repeat_single` | single-edit, from `sf1_single`, repeat 10 | 54% | 2.5 -> 2.5 | 0.27 -> 0.26 | 3719 / 372 |
+| `n4_repeat_from_sft` | factorized, from `s1_ge_all`, repeat 10 | 0.0% | 7.2 -> 7.4 | 0.74 -> 0.78 | 10602 / 1108 |
+
+**Result and takeaways.**
+- **Without the penalty the policy collapses to one polynomial** (83% repeats in the third quarter, 100% in the last): the
+  known failure. With it, repeats stay at about 0.1-0.6% and nothing collapses, so the penalty does what it is for.
+- **But it does not make the policy learn to find high polynomials.** From scratch (`n1`, `n3`) the rate of new height >= 6
+  children moves from 2.5-2.6 to 2.8-2.9 per 1024, i.e. about 10%, with 1 seed each; the mean edit shrinks only from 23 to
+  19 coefficients. There is little signal: the reward of a random 35-coefficient child is nearly always 0 or 1.
+- **The high rate in `n4` comes entirely from the supervised start** (about 3x the untrained rate from the first iteration,
+  flat afterwards), and RL with the repeat penalty did not move it (7.2 -> 7.4).
+- **`n2` (single-edit) can't avoid repeats by design:** a parent has only 70 one-coefficient changes and each group draws 128
+  children, so at least ~45% of children are repeats whatever the policy does (observed 54%). Policy frozen at its starting
+  point (KL 0).
+- Every run is a single seed; differences of 0.1-0.3 per 1024 are not trustworthy.
+- On the worry that the policy can't see the seen set: it does not need to. A stochastic policy gets a diminishing reward for
+  concentrating mass, which is what stopped the collapse here. What it can't do is create a gradient toward high
+  polynomials when almost nothing it samples is rewarded.

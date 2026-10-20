@@ -60,6 +60,7 @@ class Args:
     hamming_free: int = 8  # the child may change this many coefficients of the parent without penalty
     hamming_penalty: float = 0.5  # reward lost per coefficient changed beyond hamming_free (to be tuned)
     copy_penalty: float = 100.0  # reward lost when the child is exactly the parent
+    repeat_penalty: float = 0.0  # reward of a child already generated earlier in this run is -this (0 = off, repeats still logged)
     workers: int = 0  # Julia worker processes (0 = number of CPUs - 1)
     db: str = "runs/heights.sqlite"  # every scored polynomial is saved here ("" to disable)
     parent_db_frac: float = 0.5  # fraction of parents drawn from the polynomials saved in db
@@ -194,7 +195,7 @@ def main(args: Args):
 
     envs = PolyEnv(
         args.num_envs, args.p, args.n, args.d, cutoff=args.cutoff, infinite_score=args.infinite_score,
-        hamming_penalty=args.hamming_penalty, hamming_free=args.hamming_free, copy_penalty=args.copy_penalty, workers=args.workers, db=args.db,
+        hamming_penalty=args.hamming_penalty, hamming_free=args.hamming_free, copy_penalty=args.copy_penalty, repeat_penalty=args.repeat_penalty, workers=args.workers, db=args.db,
         parent_db_frac=args.parent_db_frac, parent_min_height=args.parent_min_height,
         parent_db_min_size=args.parent_db_min_size, parent_temperature=args.parent_temperature,
         parent_max_height=args.curriculum_start or None, children_per_parent=args.children_per_parent, seed=args.seed,
@@ -273,6 +274,10 @@ def main(args: Args):
                 "charts/worse": float((child < parent).mean()),
                 "charts/hamming": float(info["hamming"].mean()),
                 "charts/copied": float((info["hamming"] == 0).mean()),
+                "charts/repeated": float(info["repeated"].mean()),  # share of children already generated earlier in the run
+                "charts/new_ge6": int((~info["repeated"] & (child >= 6)).sum()),  # first sightings with height >= 6
+                "charts/new_ge8": int((~info["repeated"] & (child >= 8)).sum()),
+                "charts/unique_children": len(envs.seen),
                 "charts/group_hit_rate": hit,  # share of parents for which some child beat the parent
                 "charts/parent_ceiling": ceiling,
                 "charts/child_score": float(child.mean()),
@@ -307,11 +312,12 @@ def main(args: Args):
                 wandb.log(metrics, step=global_step)
             log.info(
                 "iter %d/%d  step %d  reward %+.3f  improvement %+.3f  child %.2f (parent %.2f)  improved %.1f%%  worse %.1f%%  "
-                "hamming %.1f  copied %.1f%%  best %d  pool %d  calls %d  SPS %d  kl %.4f  ceil %d  hit %.0f%%%s",
+                "hamming %.1f  copied %.1f%%  repeated %.1f%%  new>=6 %d  new>=8 %d  best %d  pool %d  calls %d  SPS %d  kl %.4f  ceil %d  hit %.0f%%%s",
                 iteration, num_iterations, global_step, metrics["charts/reward"], metrics["charts/improvement"],
                 metrics["charts/child_score"],
                 metrics["charts/parent_score"], 100 * metrics["charts/improved"], 100 * metrics["charts/worse"],
-                metrics["charts/hamming"], 100 * metrics["charts/copied"], best, len(envs.pool), metrics["charts/oracle_calls"],
+                metrics["charts/hamming"], 100 * metrics["charts/copied"], 100 * metrics["charts/repeated"],
+                metrics["charts/new_ge6"], metrics["charts/new_ge8"], best, len(envs.pool), metrics["charts/oracle_calls"],
                 metrics["charts/SPS"], metrics["losses/kl_step"], ceiling, 100 * hit, split,
             )
             if iteration % args.save_every == 0:

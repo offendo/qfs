@@ -161,3 +161,27 @@ def test_parent_max_height_caps_pool_parents(tmp_path):
     seen = max(env.parent_scores.max(), *(env.step(env.action_space.sample())[4]["parent_score"].max() for _ in range(15)))
     assert seen > 3  # lifting the cap makes them available
     env.close()
+
+
+def test_repeats_are_penalized_across_steps_and_within_a_batch(tmp_path):
+    env = make_env(tmp_path, repeat_penalty=7.0)
+    obs, _ = env.reset(seed=0)
+    child = np.tile(obs[0], (64, 1))
+    child[:, 0] = (child[:, 0] + 1) % 3  # 64 identical children
+    _, reward, _, _, info = env.step(child)
+    assert not info["repeated"][0] and info["repeated"][1:].all()
+    assert (reward[1:] == -7).all() and reward[0] > -7
+    _, reward, _, _, info = env.step(child)  # seen in an earlier step: all repeats
+    assert info["repeated"].all() and (reward == -7).all()
+    env.close()
+
+
+def test_repeats_are_only_counted_without_a_penalty(tmp_path):
+    env = make_env(tmp_path)
+    obs, _ = env.reset(seed=0)
+    child = np.tile(obs[0], (64, 1))
+    child[:, 0] = (child[:, 0] + 1) % 3
+    _, reward, _, _, info = env.step(child)
+    assert info["repeated"].sum() == 63
+    assert np.allclose(reward, info["child_score"] - info["parent_score"])
+    env.close()
