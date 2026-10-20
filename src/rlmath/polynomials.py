@@ -5,6 +5,7 @@ A polynomial of degree d in n variables is a vector of integers in [0, p) indexe
 """
 
 from functools import lru_cache
+import itertools
 
 import numpy as np
 
@@ -60,3 +61,13 @@ def to_string(coeffs: np.ndarray, n: int, d: int) -> str:
         mono = "*".join(f"{names[i]}^{e}" if e > 1 else names[i] for i, e in enumerate(m) if e)
         terms.append(mono if c == 1 else f"{c}*{mono}")
     return " + ".join(terms) if terms else "0"
+
+
+@lru_cache(maxsize=None)
+def variable_permutations(n: int, d: int) -> np.ndarray:
+    """Index arrays of shape (n!, M): renaming the variables by permutation r turns coefficient vector f into
+    f[idx[r]]. Renaming variables never changes a polynomial's height."""
+    mons = monomials(n, d)
+    where = {tuple(m): i for i, m in enumerate(mons)}
+    return np.array([[where[tuple(m[list(perm)])] for m in mons] for perm in itertools.permutations(range(n))])
+

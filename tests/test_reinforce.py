@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from rlmath.reinforce import Agent, Args, group_advantages, main, update_curriculum
@@ -83,3 +84,18 @@ def test_short_run_with_groups_and_curriculum(tmp_path):
     )
     main(args)
     assert (tmp_path / "model.pt").exists()
+
+
+def test_init_and_kl_penalty(tmp_path):
+    base = Args(
+        p=3, total_timesteps=256, num_envs=64, children_per_parent=8, workers=2, cuda=False,
+        db=str(tmp_path / "heights.sqlite"), d_model=32, n_layers=2, n_heads=4, d_ff=64,
+    )
+    main(Args(**{**base.__dict__, "out": str(tmp_path / "a")}))
+    ckpt = str(tmp_path / "a" / "model.pt")
+    main(Args(**{**base.__dict__, "out": str(tmp_path / "b"), "init": ckpt, "kl_coef": 0.1}))
+    assert (tmp_path / "b" / "model.pt").exists()
+    with pytest.raises(ValueError):
+        main(Args(**{**base.__dict__, "out": str(tmp_path / "c"), "init": ckpt, "d_model": 64}))
+    with pytest.raises(ValueError):
+        main(Args(**{**base.__dict__, "out": str(tmp_path / "d"), "kl_coef": 0.1}))

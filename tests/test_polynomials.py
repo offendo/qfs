@@ -24,3 +24,12 @@ def test_to_string():
     f[0] = 1
     f[-1] = 2
     assert to_string(f, 4, 4) == "w^4 + 2*z^4"
+
+
+def test_variable_permutations_are_permutations_of_the_monomials():
+    from rlmath.polynomials import variable_permutations
+
+    idx = variable_permutations(4, 4)
+    assert idx.shape == (24, 35)
+    assert all(sorted(row) == list(range(35)) for row in idx)
+    assert (idx[0] == np.arange(35)).all()  # the first permutation is the identity

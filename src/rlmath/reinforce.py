@@ -20,6 +20,7 @@ one whenever the share of children that are at least as high as their parent, av
     uv run rlmath-reinforce --p 5 --total-timesteps 1000000 --track
 """
 
+import copy
 from dataclasses import asdict, dataclass
 import logging
 from pathlib import Path
@@ -77,6 +78,10 @@ class Args:
     norm_adv: bool = True  # divide the advantages by their standard deviation
     ent_coef: float = 0.0  # entropy is summed over the coefficients
     max_grad_norm: float = 0.5
+
+    # starting point
+    init: str = ""  # checkpoint to start from (a model.pt, or one written by rlmath-sft); its model size must match
+    kl_coef: float = 0.0  # penalty on KL(policy || the policy at the start), summed over coefficients; needs init
 
     # model
     d_model: int = 128
@@ -154,6 +159,17 @@ def main(args: Args):
         parent_max_height=args.curriculum_start or None, children_per_parent=args.children_per_parent, seed=args.seed,
     )
     agent = Agent(args.p, args.n, args.d, args.d_model, args.n_layers, args.n_heads, args.d_ff).to(device)
+    ref = None
+    if args.init:
+        ckpt = torch.load(args.init, map_location=device)
+        for k in ("p", "n", "d", "d_model", "n_layers", "n_heads", "d_ff"):
+            if ckpt["args"][k] != getattr(args, k):
+                raise ValueError(f"--init was trained with {k}={ckpt['args'][k]}, this run has {k}={getattr(args, k)}")
+        agent.load_state_dict(ckpt["model"])
+        if args.kl_coef:
+            ref = copy.deepcopy(agent).requires_grad_(False)
+    elif args.kl_coef:
+        raise ValueError("--kl-coef needs --init")
     optimizer = torch.optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
     num_iterations = args.total_timesteps // args.num_envs
     log.info("writing to %s; device %s; %d Julia workers", out, device, envs.oracle.n_workers)
@@ -182,6 +198,12 @@ def main(args: Args):
             advantages = group_advantages(shaped, args.children_per_parent, args.norm_adv)
             pg_loss = -(advantages * logprob).mean()
             loss = pg_loss - args.ent_coef * entropy.mean()
+            kl_ref = torch.zeros((), device=device)
+            if ref is not None:
+                with torch.no_grad():
+                    ref_dist = ref(obs_t)
+                kl_ref = kl_divergence(dist, ref_dist).sum(-1).mean()
+                loss = loss + args.kl_coef * kl_ref
 
             optimizer.zero_grad()
             loss.backward()
@@ -224,6 +246,7 @@ def main(args: Args):
                 "losses/grad_norm": float(grad_norm),
                 "losses/kl_step": kl.mean().item(),
                 "losses/kl_step_max": kl.max().item(),
+                "losses/kl_to_init": kl_ref.item(),
             }
             # The same numbers for parents drawn from the pool and for uniformly random ones.
             split = ""
