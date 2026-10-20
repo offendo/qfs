@@ -179,16 +179,30 @@ def main(args: Args):
                 "losses/entropy": entropy.mean().item(),
                 "losses/grad_norm": float(grad_norm),
             }
+            # The same numbers for parents drawn from the pool and for uniformly random ones.
+            split = ""
+            for name, mask in (("pool", info["from_pool"]), ("random", ~info["from_pool"])):
+                if mask.any():
+                    gain = (child - parent)[mask]
+                    metrics.update({
+                        f"{name}/fraction": float(mask.mean()),
+                        f"{name}/improvement": float(gain.mean()),
+                        f"{name}/improved": float((gain > 0).mean()),
+                        f"{name}/worse": float((gain < 0).mean()),
+                        f"{name}/parent_score": float(parent[mask].mean()),
+                        f"{name}/hamming": float(info["hamming"][mask].mean()),
+                    })
+                    split += f"  {name} {gain.mean():+.2f} ({100 * (gain > 0).mean():.0f}% up, n {mask.sum()})"
             if args.track:
                 wandb.log(metrics, step=global_step)
             log.info(
                 "iter %d/%d  step %d  reward %+.3f  improvement %+.3f  child %.2f (parent %.2f)  improved %.1f%%  worse %.1f%%  "
-                "hamming %.1f  copied %.1f%%  best %d  pool %d  calls %d  SPS %d",
+                "hamming %.1f  copied %.1f%%  best %d  pool %d  calls %d  SPS %d%s",
                 iteration, num_iterations, global_step, metrics["charts/reward"], metrics["charts/improvement"],
                 metrics["charts/child_score"],
                 metrics["charts/parent_score"], 100 * metrics["charts/improved"], 100 * metrics["charts/worse"],
                 metrics["charts/hamming"], 100 * metrics["charts/copied"], best, len(envs.pool), metrics["charts/oracle_calls"],
-                metrics["charts/SPS"],
+                metrics["charts/SPS"], split,
             )
             if iteration % args.save_every == 0:
                 save()

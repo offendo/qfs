@@ -155,7 +155,8 @@ class PolyEnv(gym.vector.VectorEnv):
             s[check[~np.array(self.oracle.smooth(coeffs[check]))]] = 0
         return s
 
-    def _sample_parents(self) -> tuple[np.ndarray, np.ndarray]:
+    def _sample_parents(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Parents, their scores, and whether each came from the pool (else it is uniformly random)."""
         parents = random_polys(self.rng, self.num_envs, self.p, self.n, self.d)
         scores = np.zeros(self.num_envs, dtype=np.int64)
         n_pool = 0
@@ -166,12 +167,12 @@ class PolyEnv(gym.vector.VectorEnv):
         if n_pool < self.num_envs:
             scores[n_pool:] = self._score(parents[n_pool:])
             self._remember(parents[n_pool:], scores[n_pool:])
-        return parents, scores
+        return parents, scores, np.arange(self.num_envs) < n_pool
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         if seed is not None:
             self.rng = np.random.default_rng(seed)
-        self.parents, self.parent_scores = self._sample_parents()
+        self.parents, self.parent_scores, self.from_pool = self._sample_parents()
         return self.parents.copy(), {}
 
     def step(self, actions: np.ndarray):
@@ -182,9 +183,12 @@ class PolyEnv(gym.vector.VectorEnv):
         copied = hamming == 0
         too_far = np.maximum(hamming - self.hamming_free, 0)
         reward = child_scores - self.parent_scores - self.hamming_penalty * too_far - self.copy_penalty * copied
-        info = {"parent_score": self.parent_scores, "child_score": child_scores, "hamming": hamming}
+        info = {
+            "parent_score": self.parent_scores, "child_score": child_scores, "hamming": hamming,
+            "from_pool": self.from_pool,
+        }
         reward = reward.astype(np.float32)
-        self.parents, self.parent_scores = self._sample_parents()
+        self.parents, self.parent_scores, self.from_pool = self._sample_parents()
         terminated = np.ones(self.num_envs, dtype=bool)
         return self.parents.copy(), reward, terminated, np.zeros(self.num_envs, dtype=bool), info
 
