@@ -43,7 +43,10 @@ setting, the coefficients, the status and the height. `src/rlmath/store.py` docu
 and shows how to read them. By default (`--parent-db-frac 0.5`), half of the parents are drawn from a pool of smooth
 polynomials of height at least `--parent-min-height`. The pool starts with the ones saved in that
 file when the run starts and grows with every such polynomial the run scores. Until it holds
-`--parent-db-min-size` polynomials (default 1000), all parents are random.
+`--parent-db-min-size` polynomials (default 1000), all parents are random. Among pool parents, a
+height level is chosen with probability proportional to `exp(height / --parent-temperature)` and
+then a polynomial of that level uniformly, so a lower temperature favours higher heights (default 3;
+1 puts most parents at the top level, a very large value gives equal weight to every level).
 
 Each run writes its model to `runs/<name>/model.pt`.
 

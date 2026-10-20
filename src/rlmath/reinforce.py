@@ -58,6 +58,7 @@ class Args:
     parent_db_frac: float = 0.5  # fraction of parents drawn from the polynomials saved in db
     parent_min_height: int = 2  # ... that have at least this height
     parent_db_min_size: int = 1000  # parents are all random until the pool holds this many polynomials
+    parent_temperature: float = 3.0  # pool parents: P(height level) ~ exp(height / this); lower favours higher
 
     # algorithm
     total_timesteps: int = 1_000_000  # children scored
@@ -121,7 +122,7 @@ def main(args: Args):
         args.num_envs, args.p, args.n, args.d, cutoff=args.cutoff, infinite_score=args.infinite_score,
         hamming_penalty=args.hamming_penalty, copy_penalty=args.copy_penalty, workers=args.workers, db=args.db,
         parent_db_frac=args.parent_db_frac, parent_min_height=args.parent_min_height,
-        parent_db_min_size=args.parent_db_min_size, seed=args.seed,
+        parent_db_min_size=args.parent_db_min_size, parent_temperature=args.parent_temperature, seed=args.seed,
     )
     agent = Agent(args.p, args.n, args.d, args.d_model, args.n_layers, args.n_heads, args.d_ff).to(device)
     optimizer = torch.optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
