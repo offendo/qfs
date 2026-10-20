@@ -38,9 +38,10 @@ def random_edit(rng: np.random.Generator, p: int, k: int):
     return act
 
 
-def policy_edit(agent: Agent, device, resample_copies: bool = True, tries: int = 20):
+def policy_edit(agent: Agent, device, resample_copies: bool = True, tries: int = 100):
     """Sample a child per parent. The environment penalizes an exact copy, so by default copies are drawn again
-    (up to `tries` times); otherwise a policy that copies often would get "same" results for free."""
+    (up to `tries` times); otherwise a policy that copies often would get "same" results for free. A policy that
+    copies nearly always still leaves some copies, which `copied` reports and "retain_nocopy" does not count."""
 
     def act(obs: np.ndarray) -> np.ndarray:
         with torch.no_grad():
@@ -67,8 +68,16 @@ def run_cell(env: PolyEnv, act, ceiling: int, batches: int, seed: int) -> dict:
         child.append(info["child_score"])
         ham.append(info["hamming"])
     gain, parent, child, ham = map(np.concatenate, (gain, parent, child, ham))
-    by_parent = {  # for each exact parent height: how many, how often the child is at least as high, mean child
-        str(h): {"n": int((parent == h).sum()), "retain": float((gain[parent == h] >= 0).mean()), "child": float(child[parent == h].mean())}
+    not_copy = ham > 0
+    by_parent = {  # for each exact parent height: how many, how often the child is at least as high (copies excluded
+        # in "retain_nocopy": an exact copy trivially keeps the height), the share of exact copies, the mean child
+        str(h): {
+            "n": int((parent == h).sum()),
+            "retain": float((gain[parent == h] >= 0).mean()),
+            "retain_nocopy": float(((gain >= 0) & not_copy)[parent == h].mean()),
+            "copied": float((~not_copy)[parent == h].mean()),
+            "child": float(child[parent == h].mean()),
+        }
         for h in np.unique(parent)
     }
     return {

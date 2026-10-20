@@ -10,6 +10,15 @@ P(height level) proportional to exp(height / 3), as in training.
 
 Research choices made on my own authority (the user allowed this for the night) are marked **[choice]**.
 
+> **Erratum (found while analysing evaluation E).** Two conclusions I first wrote in E9/E10 and E11 were wrong and are
+> corrected below. The evaluation redraws children that equal their parent, but only up to a cap (20 times at first).
+> A policy that copies its parent most of the time leaves some exact copies after the cap, and an exact copy trivially
+> "keeps the height". That inflated the **retention at high parents** of `r10_free3_s3` (5.4% copies), `r7_free1` (1.1%),
+> `r9_free3_s2` (1.1%), `r11` (0.9%) and `r12_free2` (0.8%); it does not affect the other policies (about 0%) and barely
+> affects overall improvement (a copy counts as 0). The tell was that `r10`'s retention was flat at about 5.5% for
+> every parent height from 4 to 8, whereas real retention decays about 3x per level. The evaluation now redraws up to 100
+> times and reports retention with exact copies excluded (`retain_nocopy`); evaluation F redoes the comparison that way.
+
 ---
 
 ## E0. How many one-coefficient (parent, child) pairs does the database hold?
@@ -264,14 +273,13 @@ and slightly better than S1 (by 0.04-0.06). Mean Hamming 1.98. Keeping the paren
 change (each extra changed coefficient costs 0.5). **Result.** Mean Hamming 1.00 (`r7`) and 1.04 (`r8`).
 - Overall improvement: `r8` is the best method in this evaluation at ceilings 3-6 (-0.879 / -1.512 / -2.218 / -2.932),
   within 0.01-0.02 of `r1_free3`; `r7` (from scratch) is a little worse at low ceilings (-0.355 at ceiling 2).
-- **High parents: `r7_free1` is clearly the best at parent heights 5 and 6** - children keep the height 3.7% (parent 5)
-  and 1.8% (parent 6) of the time, against 1.4% / 0.5% for a random single change and 2.5% / 0.8% for S1. `r8` gets
-  3.0% / 1.1%.
+- ~~High parents: `r7_free1` is clearly the best at parent heights 5 and 6~~ **(withdrawn, see the erratum at the top.)**
+  The table above shows 3.7% (parent 5) and 1.8% (parent 6) of children keeping the height for `r7`, against 1.4% / 0.5%
+  for a random single change, but 1.1% of `r7`'s children were exact copies of the parent after the redraw cap, so most
+  of its advantage at parent 6 is copies. The corrected numbers are in evaluation F.
 
-**Takeaway.** The one setting that shows signs of *parent-specific* structure (retention at the highest parents several
-times a random single change) is the one that forces exactly one change and has no supervised prior. It is also not
-the best overall, so there is a trade-off: SFT improves the easy bulk (parent 2-3), and the unsupervised budget-1 policy
-does better at the top.
+**Takeaway.** Overall, a budget of 1 gives the same band of results as budgets 2-3 (within about 0.04 in improvement).
+I originally read the retention table as the first sign of parent-specific structure; that reading is withdrawn.
 
 ### S4. Bigger SFT model (256 wide, 8 layers; evaluated here)
 
@@ -323,18 +331,17 @@ Share of children at least as high as their parent, by exact parent height (ceil
 
 **Result.** The recipe is **seed-fragile**. Seed 2 matches seed 1 on overall improvement (-0.334 vs -0.291 at ceiling 2,
 -2.945 vs -2.941 at ceiling 6) with a larger mean Hamming distance (2.1 vs 1.15). Seed 3 ends at the level of a random
-double change overall (-0.713 at ceiling 2). **But seed 3 is the most interesting policy of the night**: it is the worst on
-low parents (28% keep the height at parent height 2, vs 42% for a random single change) and by far the best on high
-parents: it keeps the height 7.9% / 6.1% / 5.7% of the time at parent heights 4 / 5 / 6, against 0.5-0.8% for a random
-single change at height 6 and 1.9% for seed 2. Its mean child score rises with the parent (1.29 at ceiling 2, 1.43 at
-ceiling 6), the only policy of the first twelve whose output depends on the parent in this way. Its overall improvement is
-poor only because the ceiling-weighted average is dominated by low parents.
+double change overall (-0.713 at ceiling 2). Its retention table looks remarkable (7.9% / 6.1% / 5.7% of children keep the
+height at parent heights 4 / 5 / 6, against 0.5-0.8% for a random single change at height 6), and I first read that as a
+policy that had learned to preserve high parents. **That reading was wrong (erratum at the top):** 5.4% of this
+policy's children are exact copies of the parent even after redrawing, and its retention is flat at about 5.5% for every
+parent height from 4 to 8 (evaluation E), which is the copy rate, not structure. Seed 3 is a policy that has collapsed
+toward copying its parent, which also explains its poor overall numbers (28% retention at parent height 2 vs 42% for a
+random single change).
 
-**Takeaway.** The "overall improvement" metric hides the thing we care about. A policy that preserves the height of
-high parents can look bad on it. Retention by exact parent height (the second table) is the better metric from here on.
-My reading, untested: seed 3 happened to spend its training on high parents (where the curriculum ended at ceiling 5) and
-learned which single-coefficient changes are harmless for the parent in front of it, at the cost of forgetting low parents.
-That motivates E14.
+**Takeaway.** Seed fragility is real: of three seeds of the same recipe, one collapsed toward copying. And a retention
+rate that does not fall with the parent's height is a red flag for exact copies, not for structure. Retention by exact
+parent height with copies excluded is the metric to use.
 
 ### E12. The same recipe with 3.3x more training (`r11_free3_long`, 5M children)
 

@@ -33,11 +33,13 @@ print("\nmean parent score at each ceiling: " + ", ".join(f"{c}: {results[f'{met
 top = ceilings[-1]
 if all("by_parent" in results.get(f"{m}@{top}", {}) for m in methods):
     heights = sorted({int(h) for m in methods for h in results[f"{m}@{top}"]["by_parent"]})
-    print(f"\n**share of children at least as high as their parent, by exact parent height (ceiling {top} pool)**\n")
+    key = "retain_nocopy" if all("retain_nocopy" in results[f"{m}@{top}"]["by_parent"][h] for m in methods for h in results[f"{m}@{top}"]["by_parent"]) else "retain"
+    print(f"\n**share of children at least as high as their parent, by exact parent height (ceiling {top} pool; "
+          f"{'exact copies are not counted' if key == 'retain_nocopy' else 'exact copies are counted'})**\n")
     print("| method | " + " | ".join(f"parent {h}" for h in heights) + " |")
     print("|---|" + "---|" * len(heights))
     for m in methods:
         bp = results[f"{m}@{top}"]["by_parent"]
-        print(f"| {m} | " + " | ".join(f"{100 * bp[str(h)]['retain']:.1f}" if str(h) in bp else "" for h in heights) + " |")
+        print(f"| {m} | " + " | ".join(f"{100 * bp[str(h)][key]:.1f}" if str(h) in bp else "" for h in heights) + " |")
     print("\nparents per height: " + ", ".join(f"{h}: {results[f'{methods[0]}@{top}']['by_parent'].get(str(h), {}).get('n', 0)}" for h in heights))
 
