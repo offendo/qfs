@@ -284,3 +284,69 @@ Every method's mean child score is flat across ceilings (e.g. S1 1.65-1.66; `r1_
 although the mean parent score goes from 2.0 to 4.6. The policies mostly lift a parent-independent baseline (child
 score about 1.7 instead of 1.45) and change as little as possible. Only `r7_free1` shows a hint of dependence (child
 1.65 at ceiling 2, 1.68 at ceiling 6; retention at parent 6 of 1.8%).
+
+---
+
+## Third evaluation (C): seeds, a longer run, and a free budget of 2
+
+Same protocol and parents as before (S1 and `r1_free3` appear again as references: S1 -0.363 / -2.984 vs -0.342 / -2.998
+in B, `r1_free3` -0.291 / -2.941 vs -0.291 / -2.941, so the evaluation is stable to about 0.02).
+
+Improvement (child score - parent score):
+
+| method | ceiling 2 | ceiling 3 | ceiling 4 | ceiling 5 | ceiling 6 | mean Hamming |
+|---|---|---|---|---|---|---|
+| random-1 | -0.549 | -1.129 | -1.772 | -2.467 | -3.195 | 1.00 |
+| random-2 | -0.716 | -1.302 | -1.940 | -2.640 | -3.367 | 2.00 |
+| S1 | -0.363 | -0.934 | -1.569 | -2.267 | -2.984 | 1.55 |
+| r1_free3 (seed 1) | -0.291 | -0.892 | -1.524 | -2.222 | -2.941 | 1.15 |
+| r9_free3_s2 (seed 2) | -0.334 | -0.911 | -1.551 | -2.216 | -2.945 | 2.09 |
+| r10_free3_s3 (seed 3) | -0.713 | -1.262 | -1.865 | -2.521 | -3.214 | 1.96 |
+| r11_free3_long (5M children) | -0.417 | -1.006 | -1.633 | -2.340 | -3.053 | 1.39 |
+| r12_free2 | -0.329 | -0.895 | -1.536 | -2.241 | -2.954 | 1.05 |
+
+Share of children at least as high as their parent, by exact parent height (ceiling-6 pool):
+
+| method | parent 2 | parent 3 | parent 4 | parent 5 | parent 6 |
+|---|---|---|---|---|---|
+| random-1 | 42.4 | 14.1 | 5.1 | 1.4 | 0.5 |
+| S1 | 66.8 | 22.5 | 7.7 | 2.4 | 0.8 |
+| r1_free3 | 67.5 | 22.8 | 7.6 | 2.5 | 0.7 |
+| r9_free3_s2 | 67.5 | 22.3 | 8.8 | 3.4 | 1.9 |
+| **r10_free3_s3** | 28.2 | 12.4 | 7.9 | **6.1** | **5.7** |
+| r11_free3_long | 56.3 | 18.9 | 7.5 | 2.9 | 1.5 |
+| r12_free2 | 65.7 | 22.4 | 8.3 | 3.3 | 1.6 |
+
+### E11. Seeds 2 and 3 of the free-budget-3 run (`r9_free3_s2`, `r10_free3_s3`)
+
+**Why.** Every claim so far came from one seed. **What.** Exactly `r1_free3` (E4) with `--seed 2` and `--seed 3`.
+
+**Result.** The recipe is **seed-fragile**. Seed 2 matches seed 1 on overall improvement (-0.334 vs -0.291 at ceiling 2,
+-2.945 vs -2.941 at ceiling 6) with a larger mean Hamming distance (2.1 vs 1.15). Seed 3 ends at the level of a random
+double change overall (-0.713 at ceiling 2). **But seed 3 is the most interesting policy of the night**: it is the worst on
+low parents (28% keep the height at parent height 2, vs 42% for a random single change) and by far the best on high
+parents: it keeps the height 7.9% / 6.1% / 5.7% of the time at parent heights 4 / 5 / 6, against 0.5-0.8% for a random
+single change at height 6 and 1.9% for seed 2. Its mean child score rises with the parent (1.29 at ceiling 2, 1.43 at
+ceiling 6), the only policy of the first twelve whose output depends on the parent in this way. Its overall improvement is
+poor only because the ceiling-weighted average is dominated by low parents.
+
+**Takeaway.** The "overall improvement" metric hides the thing we care about. A policy that preserves the height of
+high parents can look bad on it. Retention by exact parent height (the second table) is the better metric from here on.
+My reading, untested: seed 3 happened to spend its training on high parents (where the curriculum ended at ceiling 5) and
+learned which single-coefficient changes are harmless for the parent in front of it, at the cost of forgetting low parents.
+That motivates E14.
+
+### E12. The same recipe with 3.3x more training (`r11_free3_long`, 5M children)
+
+**Why.** Does the best recipe keep improving with training? **What.** `r1_free3` with `--total-timesteps 5000000`.
+**Result.** Worse than the 1.5M run on every ceiling (-0.417 vs -0.291 at ceiling 2; retention at parent 2: 56% vs 68%),
+with a bit better retention at the top (parent 6: 1.5% vs 0.7%). The mean per-step KL in the last 100 iterations is 0.0000
+for it and for every other run in this batch: **the policies freeze** (become near-deterministic) well before training
+ends, so extra steps cannot help, and the drift before freezing is not monotone improvement.
+
+### E13. Free budget of 2 (`r12_free2`)
+
+**Why.** Fill in the budget sweep 1 / 2 / 3 / 8. **Result.** -0.329 / -0.895 / -1.536 / -2.241 / -2.954; mean Hamming 1.05;
+retention 8.3% / 3.3% / 1.6% at parents 4 / 5 / 6. Between `r7_free1` and `r1_free3`, and about equal to seed 2 of free3.
+**Takeaway.** Budgets of 1-3 all land in the same band (within about 0.04 overall), with seed noise of the same size.
+(The odd last-iteration line "child 1.00" printed in the run log is a single batch of 8 parents, not the final policy.)
