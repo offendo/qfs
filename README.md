@@ -88,7 +88,8 @@ class of crashes, and a worker that dies is restarted.
 
 **Environment.** One episode is one step. The observation is a parent polynomial, a vector of 35
 coefficients in F_p (quartics). The action is a child polynomial, a full coefficient vector. The
-reward is `score(child) - score(parent) - hamming_penalty * (coefficients that differ) - copy_penalty * (child is exactly the parent)`. `PolyEnv` runs `--num-envs` episodes as one batch with one
+reward is `score(child) - score(parent) - hamming_penalty * max(0, distance - hamming_free) - copy_penalty * (child is exactly the parent)`,
+where distance is the number of coefficients that differ. `PolyEnv` runs `--num-envs` episodes as one batch with one
 oracle call, and `step` returns the next parents. Parents are uniformly random, or partly drawn from
 the database (`--parent-db-frac`).
 

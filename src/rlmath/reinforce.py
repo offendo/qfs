@@ -51,7 +51,8 @@ class Args:
     d: int = 4
     cutoff: int = 10  # quartic K3 surfaces: finite heights are at most 10
     infinite_score: int = 1  # score of supersingular polynomials; 1 = not rewarded
-    hamming_penalty: float = 0.5  # reward lost per coefficient that differs from the parent (to be tuned)
+    hamming_free: int = 8  # the child may change this many coefficients of the parent without penalty
+    hamming_penalty: float = 0.5  # reward lost per coefficient changed beyond hamming_free (to be tuned)
     copy_penalty: float = 100.0  # reward lost when the child is exactly the parent
     workers: int = 0  # Julia worker processes (0 = number of CPUs - 1)
     db: str = "runs/heights.sqlite"  # every scored polynomial is saved here ("" to disable)
@@ -120,7 +121,7 @@ def main(args: Args):
 
     envs = PolyEnv(
         args.num_envs, args.p, args.n, args.d, cutoff=args.cutoff, infinite_score=args.infinite_score,
-        hamming_penalty=args.hamming_penalty, copy_penalty=args.copy_penalty, workers=args.workers, db=args.db,
+        hamming_penalty=args.hamming_penalty, hamming_free=args.hamming_free, copy_penalty=args.copy_penalty, workers=args.workers, db=args.db,
         parent_db_frac=args.parent_db_frac, parent_min_height=args.parent_min_height,
         parent_db_min_size=args.parent_db_min_size, parent_temperature=args.parent_temperature, seed=args.seed,
     )
@@ -162,6 +163,7 @@ def main(args: Args):
             global_step = iteration * args.num_envs
             metrics = {
                 "charts/reward": float(reward.mean()),
+                "charts/improvement": float((child - parent).mean()),  # reward without the penalties
                 "charts/improved": float((child > parent).mean()),
                 "charts/worse": float((child < parent).mean()),
                 "charts/hamming": float(info["hamming"].mean()),
@@ -180,9 +182,10 @@ def main(args: Args):
             if args.track:
                 wandb.log(metrics, step=global_step)
             log.info(
-                "iter %d/%d  step %d  reward %+.3f  child %.2f (parent %.2f)  improved %.1f%%  worse %.1f%%  "
+                "iter %d/%d  step %d  reward %+.3f  improvement %+.3f  child %.2f (parent %.2f)  improved %.1f%%  worse %.1f%%  "
                 "hamming %.1f  copied %.1f%%  best %d  pool %d  calls %d  SPS %d",
-                iteration, num_iterations, global_step, metrics["charts/reward"], metrics["charts/child_score"],
+                iteration, num_iterations, global_step, metrics["charts/reward"], metrics["charts/improvement"],
+                metrics["charts/child_score"],
                 metrics["charts/parent_score"], 100 * metrics["charts/improved"], 100 * metrics["charts/worse"],
                 metrics["charts/hamming"], 100 * metrics["charts/copied"], best, len(envs.pool), metrics["charts/oracle_calls"],
                 metrics["charts/SPS"],
