@@ -53,3 +53,130 @@ child > parent.
   (72% -> 24% -> 8.5% -> 3.0% -> 1.3%), matching the "each level costs a factor of p" picture.
 - The pairs come from the earlier search's local-search neighbourhoods, so they are all single-coefficient changes
   and are biased toward whatever that search explored.
+
+---
+
+## E1. Random-edit baselines and a common evaluation harness
+
+**Why.** Earlier comparisons used baselines measured on different parents, which made them hard to trust, and a policy
+that copies its parent gets a free "same" outcome. I wanted every method scored on exactly the same parents, with
+copies not counting for free.
+
+**What.** `experiments/evaluate.py`: one environment with the parent pool frozen (no new polynomials enter it) and a
+fixed seed per ceiling, so every method sees identical parents. Each cell is 40 batches x 1024 = 40,960 children, one
+per parent. **[choice]** Children that equal their parent are redrawn (up to 20 times) for the policies, since the
+training environment penalizes copies (-100) and a policy that copies 35% of the time would otherwise look better than
+it is. Random baselines change k = 1, 2 or 3 randomly chosen coefficients to a different value. Metrics use
+`child score - parent score`, with no penalties. `experiments/tabulate.py` prints the markdown tables below.
+
+**Result** (full tables are in E2-E5; random rows only):
+
+| method | ceiling 2 | ceiling 3 | ceiling 4 | ceiling 5 | ceiling 6 |
+|---|---|---|---|---|---|
+| random-1 | -0.549 | -1.129 | -1.772 | -2.467 | -3.195 |
+| random-2 | -0.716 | -1.302 | -1.940 | -2.640 | -3.367 |
+| random-3 | -0.795 | -1.374 | -2.011 | -2.714 | -3.438 |
+
+**Takeaways.**
+- The child's mean score under a random edit is the same whatever the parent: 1.45 / 1.28 / 1.21 for k = 1 / 2 / 3, at
+  every ceiling. Even a single random coefficient change gives a child that looks like a generic polynomial, so
+  nothing of the parent's height survives (93% of children are worse at ceiling 6).
+- Fewer changes is better: k = 1 beats k = 2 by about 0.17 and k = 2 beats k = 3 by about 0.08 at every ceiling.
+- Mean parent score at each ceiling (pool parents, weighted toward high levels with temperature 3): 2.00, 2.58, 3.22,
+  3.92, 4.64.
+
+---
+
+## E2. Supervised warm start (SFT) on stored one-coefficient edits
+
+**Why.** The user asked whether we can bootstrap by supervised fine-tuning. Reinforcement learning from scratch has a
+sparse reward and has to learn to copy 30+ coefficients exactly; stored (parent, child) pairs give a dense target.
+
+**What.** New `src/rlmath/sft.py` (`rlmath-sft`): trains the same transformer to maximize log pi(child | parent) on the
+pairs from E0. Held-out parents (2%), random variable-renaming augmentation (same renaming for parent and child).
+Variants **[choices, in the user's words "make research direction choices as long as you document them"]**:
+
+| id | pairs used | why | pairs | epochs | model |
+|---|---|---|---|---|---|
+| S1 `s1_ge_all` | child >= parent, parent >= 2 | the natural "edits that did not hurt" target | 1,371,669 | 8 | 128 wide, 4 layers |
+| S2 `s2_gt_all` | child > parent only | teach improvement only | 467,375 | 8 | same |
+| S3 `s3_ge_h3plus` | child >= parent, parent >= 3 | 89% of S1 is height-2 parents; focus on harder parents | 156,127 | 30 | same |
+| S4 `s4_ge_all_big` | as S1 | does capacity matter for SFT? | 1,371,669 | 8 | 256 wide, 8 layers |
+
+```
+uv run python experiments/run_sft_variants.py pairs_p3.npz sft/     # CUDA_VISIBLE_DEVICES=1
+```
+
+**SFT results (held-out negative log-likelihood per pair, nats).** S1 4.151, S2 4.180, S3 4.171, S4 4.125.
+References: choosing one of the 70 single changes uniformly costs ln 70 = 4.25; the best model that ignores the
+parent and treats the 35 coefficients independently costs 5.23. So the models do use the parent, but not by much. All
+four give probability 0.646-0.647 that at least one coefficient changes, i.e. they copy their parent 35% of the time
+(the factorized output cannot express "exactly one coefficient changes").
+
+**Evaluation (identical parents, copies redrawn).** Improvement (child score - parent score; higher is better):
+
+| method | ceiling 2 | ceiling 3 | ceiling 4 | ceiling 5 | ceiling 6 | mean Hamming |
+|---|---|---|---|---|---|---|
+| random-1 | -0.549 | -1.129 | -1.772 | -2.467 | -3.195 | 1.00 |
+| random-2 | -0.716 | -1.302 | -1.940 | -2.640 | -3.367 | 2.00 |
+| S1 | -0.362 | -0.925 | -1.579 | -2.263 | -2.994 | 1.54 |
+| S2 | -0.349 | -0.925 | -1.568 | -2.270 | -2.994 | 1.55 |
+| S3 | -0.355 | -0.935 | -1.572 | -2.268 | -3.001 | 1.55 |
+
+(S4 is evaluated in the second batch, below.)
+
+**Takeaways.**
+- Every SFT variant beats random single and double changes at every ceiling, by about 0.19 over random-1 and 0.35-0.38
+  over random-2 (improvement), and the share of children at least as high as their parent is about 1.5x that of random-1
+  (e.g. 65.7% vs 43.9% at ceiling 2, 11.0% vs 7.2% at ceiling 6).
+- **S1, S2 and S3 are indistinguishable** (within about 0.01). Which pairs we imitate - keep-or-improve, strict
+  improvement, or only harder parents - does not matter. That suggests what is learned is generic ("a small change that
+  does less damage"), not height-specific.
+- The children's mean score is about 1.65 at every ceiling (parent-independent, like the random edits' 1.45). The gain
+  over random is therefore a roughly constant lift of the child, not preserved parent structure.
+
+---
+
+## E3. Reference: RL from scratch with the curriculum (the previous session's best run)
+
+**Why.** A fair comparison for the SFT and RL-from-SFT runs needs the earlier from-scratch policy scored on the same
+parents. This run existed already: 8 parents x 128 children per iteration, 100% pool parents, curriculum from ceiling
+2, free Hamming budget 8, penalty 0.5, copy penalty 100, 1.5M children, seed 1 (`rf_cur`, run before tonight).
+
+**Result.** Improvement `scratch`: -0.455 / -1.032 / -1.674 / -2.383 / -3.086 at ceilings 2-6, mean Hamming 1.75, mean
+child 1.55. Better than random-1 (by about 0.09-0.11) and random-2 (about 0.26-0.28), worse than every SFT variant at
+every ceiling (SFT is better by about 0.09-0.10, with no reinforcement learning at all).
+
+---
+
+## E4. RL from scratch with a free Hamming budget of 3 (`r1_free3`)
+
+**Why.** The earlier run had a free budget of 8 and ended with Hamming distance 1.8, but its early iterations used
+edits of size about 6, which a random 2-change beats. A smaller free budget should push the policy toward small edits
+sooner. Only `--hamming-free 3` differs from E3.
+
+```
+uv run python experiments/run_rl.py r1_free3 p3_snapshot.sqlite rl/ --total-timesteps 1500000 --hamming-free 3
+```
+
+**Result.** Improvement -0.293 / -0.891 / -1.523 / -2.221 / -2.942 at ceilings 2-6; mean Hamming 1.15; mean child 1.70.
+**The best of this first batch at every ceiling**, ahead of S1 by 0.05-0.07 and ahead of random-1 by about 0.25
+(ceiling 2: -0.293 vs -0.549; ceiling 6: -2.942 vs -3.195). Retention (child >= parent): 68.0% vs 43.9% at ceiling 2,
+11.4% vs 7.2% at ceiling 6.
+
+**Takeaway.** A tighter edit budget helps even though the penalty never binds (the policy's distance is already below
+3): the budget changes the early trajectory. One seed.
+
+---
+
+## E5. RL from scratch with 32 parents x 32 children (`r2_groups32`)
+
+**Why.** The KL spikes suggested that 8 distinct parents per update lets a step fit those parents too closely; more
+parents with a smaller group might generalize better. Only `--children-per-parent 32` differs from E3 (same 1024
+children per iteration, so 32 parents).
+
+**Result.** Improvement -0.558 / -1.146 / -1.778 / -2.473 / -3.195: **indistinguishable from random-1 and worse than
+E3**. Mean Hamming 3.25 (it never learned small edits), mean child 1.44.
+
+**Takeaway.** With 1.5M children, the smaller group (32 vs 128) did not learn. The larger group baseline appears to
+matter more than parent diversity. One seed.

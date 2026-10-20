@@ -38,10 +38,20 @@ def random_edit(rng: np.random.Generator, p: int, k: int):
     return act
 
 
-def policy_edit(agent: Agent, device):
+def policy_edit(agent: Agent, device, resample_copies: bool = True, tries: int = 20):
+    """Sample a child per parent. The environment penalizes an exact copy, so by default copies are drawn again
+    (up to `tries` times); otherwise a policy that copies often would get "same" results for free."""
+
     def act(obs: np.ndarray) -> np.ndarray:
         with torch.no_grad():
-            return agent.get_action(torch.as_tensor(obs, device=device))[0].cpu().numpy()
+            obs_t = torch.as_tensor(obs, device=device)
+            child = agent.get_action(obs_t)[0]
+            for _ in range(tries if resample_copies else 0):
+                copied = (child == obs_t).all(dim=1)
+                if not copied.any():
+                    break
+                child[copied] = agent.get_action(obs_t[copied])[0]
+            return child.cpu().numpy()
 
     return act
 
@@ -57,7 +67,12 @@ def run_cell(env: PolyEnv, act, ceiling: int, batches: int, seed: int) -> dict:
         child.append(info["child_score"])
         ham.append(info["hamming"])
     gain, parent, child, ham = map(np.concatenate, (gain, parent, child, ham))
+    by_parent = {  # for each exact parent height: how many, how often the child is at least as high, mean child
+        str(h): {"n": int((parent == h).sum()), "retain": float((gain[parent == h] >= 0).mean()), "child": float(child[parent == h].mean())}
+        for h in np.unique(parent)
+    }
     return {
+        "by_parent": by_parent,
         "improvement": float(gain.mean()), "up": float((gain > 0).mean()), "same": float((gain == 0).mean()),
         "down": float((gain < 0).mean()), "child": float(child.mean()), "parent": float(parent.mean()),
         "hamming": float(ham.mean()), "copied": float((ham == 0).mean()), "n": int(len(gain)),
@@ -74,6 +89,7 @@ def main():
     ap.add_argument("--batches", type=int, default=40)
     ap.add_argument("--workers", type=int, default=20)
     ap.add_argument("--temperature", type=float, default=3.0, help="parent temperature")
+    ap.add_argument("--keep-copies", action="store_true", help="do not redraw children that equal their parent")
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
@@ -84,7 +100,7 @@ def main():
     methods = {f"random-{k}": random_edit(rng, args.p, k) for k in args.baselines}
     for item in args.ckpt:
         name, path = item.split("=", 1)
-        methods[name] = policy_edit(load_agent(path, device), device)
+        methods[name] = policy_edit(load_agent(path, device), device, resample_copies=not args.keep_copies)
 
     results = {}
     for ceiling in args.ceilings:
