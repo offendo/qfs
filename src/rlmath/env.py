@@ -2,8 +2,9 @@
 
 An episode is one step. The observation is a parent polynomial (its coefficient vector over F_p),
 the action is a child polynomial (a full coefficient vector), and the reward is
-score(child) - score(parent) - hamming_penalty * (number of coefficients where they differ)
-- copy_penalty if the child is exactly the parent. The score is the quasi-F-split height of a smooth
+score(child) - score(parent) - hamming_penalty * max(0, distance - hamming_free)
+- copy_penalty if the child is exactly the parent, where distance is the number of coefficients
+that differ between child and parent: changing up to `hamming_free` of them is free. The score is the quasi-F-split height of a smooth
 polynomial; a singular or zero polynomial scores 0, so it is never worth producing.
 
 `PolyEnv` is a vector env: its `num_envs` episodes run as one batch, scored with one call to the
@@ -90,9 +91,10 @@ class PolyEnv(gym.vector.VectorEnv):
         n: int = 4,
         d: int = 4,
         cutoff: int = 10,
-        infinite_score: int = 2,  # score of supersingular (infinite-height) polynomials; 1 = not rewarded
-        hamming_penalty: float = 0.1,  # reward lost per coefficient where the child differs from the parent
-        copy_penalty: float = 0.1,  # reward lost when the child is exactly the parent
+        infinite_score: int = 1,  # score of supersingular (infinite-height) polynomials; 1 = not rewarded
+        hamming_penalty: float = 0.0,  # reward lost per coefficient changed beyond hamming_free
+        hamming_free: int = 0,  # number of coefficients the child may change without penalty
+        copy_penalty: float = 0.0,  # reward lost when the child is exactly the parent
         workers: int = 0,  # Julia worker processes (0 = number of CPUs - 1)
         db: str = "",  # SQLite file every scored polynomial is saved to, and parents are read from
         parent_db_frac: float = 0.0,  # fraction of parents drawn from the pool, once it is big enough
@@ -104,7 +106,7 @@ class PolyEnv(gym.vector.VectorEnv):
         self.num_envs = num_envs
         self.p, self.n, self.d = p, n, d
         self.cutoff, self.infinite_score = cutoff, infinite_score
-        self.hamming_penalty, self.copy_penalty = hamming_penalty, copy_penalty
+        self.hamming_penalty, self.hamming_free, self.copy_penalty = hamming_penalty, hamming_free, copy_penalty
         # For quartic K3 surfaces a chain that runs past the cutoff is supersingular.
         self.past_cutoff_is_infinite = n == 4 and d == 4 and cutoff >= 10
         m = len(monomials(n, d))
@@ -178,7 +180,8 @@ class PolyEnv(gym.vector.VectorEnv):
         self._remember(children, child_scores)
         hamming = (children != self.parents).sum(axis=1)
         copied = hamming == 0
-        reward = (child_scores - self.parent_scores) - (self.hamming_penalty * hamming) - (self.copy_penalty * copied)
+        too_far = np.maximum(hamming - self.hamming_free, 0)
+        reward = child_scores - self.parent_scores - self.hamming_penalty * too_far - self.copy_penalty * copied
         info = {"parent_score": self.parent_scores, "child_score": child_scores, "hamming": hamming}
         reward = reward.astype(np.float32)
         self.parents, self.parent_scores = self._sample_parents()

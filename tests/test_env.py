@@ -109,3 +109,17 @@ def test_pool_sampling_favours_higher_scores():
     assert share_high(1.0) > 0.95  # exp(4) = 55 to 1 in favour of the high level
     assert 0.4 < share_high(1e6) < 0.6  # equal weight per level, although the high level has 25x fewer polynomials
     assert share_high(1.0) > share_high(3.0) > share_high(1e6)
+
+
+def test_hamming_penalty_has_a_free_budget(tmp_path):
+    env = make_env(tmp_path, hamming_penalty=0.5, hamming_free=2)
+    obs, _ = env.reset(seed=0)
+    parent = env.parent_scores.copy()
+    child = obs.copy()
+    child[:32, :2] = (child[:32, :2] + 1) % 3  # two changes: inside the budget
+    child[32:, :4] = (child[32:, :4] + 1) % 3  # four changes: two beyond it
+    _, reward, _, _, info = env.step(child)
+    gain = info["child_score"] - parent
+    assert np.allclose(reward[:32], gain[:32])
+    assert np.allclose(reward[32:], gain[32:] - 1.0)
+    env.close()
