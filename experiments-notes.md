@@ -72,6 +72,9 @@ Improvement (higher is better); all numbers from evaluations F and G (`experimen
 | E18 | corrected final comparison | confirms the ranking; no policy keeps high parents better than random |
 | E19 | `q2` seeds 2 and 3, `q4` (SFT init, curriculum from 6) | robust across seeds; parent dependence varies 0.08-0.20 |
 | E21 | SFT on pairs within K = 1, 3, 5, 7 coefficients (22.7M pairs mined) | lift over a same-size random edit: +0.30 / +0.30 / +0.22 / +0.12; absolute improvement worsens with K; 4x more data changes nothing |
+| E22 | group hit rate, 128 children per parent | per child the trained models are 1.6x random; per parent `q2` is worse than random flips (diversity narrowed by RL) |
+| E23 | hill-climb (accept if not lower) vs best-of-k, no training | chaining adds nothing for random proposals; the SFT prior gives +27-32% relative |
+| E24 | free-walk game (always move, reward max(0, h - parent), repeat penalty), RL K = 4 / 8 / 16 | RL does not beat its SFT start; free walk beats independent tries for the SFT prior, loses for random |
 | E20 | repeat penalty (seen set from scratch, no Hamming penalty, copy 100) | stops collapse; no learning from scratch (new>=6: 2.5 -> 2.8 per 1024); SFT start gives 3x but RL adds nothing |
 
 ## What I learned

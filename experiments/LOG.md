@@ -681,3 +681,105 @@ Gain over a random edit of the same mean size (interpolating between the random-
 - Nothing keeps high parents: at ceiling 8 the share of children >= parent is 5.2% (K = 1) and 2.7% (K = 7) against 3.4% for random-1.
 - Not done: RL after these SFT starts; evaluation of K = 3 beyond the lift measure; the pairs file is not saved (85 MB+; rerun
   `experiments/count_near_pairs.py`). Held-out loss is not comparable across K (the target space grows).
+
+
+---
+
+## E22. Group hit rate: 128 children per parent
+
+**Why.** The user asked for the hit rate (share of parents for which at least one of 128 sampled children is strictly higher than
+the parent) of the best models against random flips. **What.** `experiments/hit_rate.py`: the same 1,024 frozen-pool parents per
+cell for every method (E18 protocol), 128 children per parent. Raw numbers: `experiments/results/hits.json`.
+
+| method | ceiling 2 | ceiling 4 | ceiling 6 | ceiling 8 |
+|---|---|---|---|---|
+| random-1 (hit / per-child) | 99.9% / 14.2% | 77.1% / 5.6% | 41.1% / 2.4% | 19.6% / 1.2% |
+| random-2 | 100% / 9.8% | 88.0% / 4.0% | 48.0% / 1.7% | 25.1% / 0.8% |
+| old single-edit SFT | 99.9% / 22.6% | 73.2% / 8.7% | 36.6% / 3.9% | 17.5% / 1.8% |
+| `q2` seeds 1 / 2 / 3 | 85 / 92 / 94% | 42 / 48 / 56% | 19 / 23 / 25% | 10.0 / 10.4 / 10.9% |
+| factorized SFT | 100% / 21.9% | 91.5% / 8.5% | 53.9% / 3.9% | 27.6% / 1.8% |
+| K=3 SFT (`a_k3_s1`) | 100% / 19.8% | 94.6% / 7.8% | 56.4% / 3.3% | 28.2% / 1.5% |
+| `r1_free3` | 37% / 23.2% | 14.5% / 8.7% | 6.1% / 3.3% | 2.9% / 1.8% |
+
+**Result.** Per child the trained single-edit models are about 1.6x better than a random flip, but per parent (some child of
+128 beats it) `q2` is clearly *worse* than random flips and the old single-edit SFT is about the same as random-1: a parent has
+only 70 single flips and 128 random draws cover most of them, while the RL-trained models concentrate on a few flips and
+repeat them (their cells ran in 5 s against 24 s for random flips, probably because repeated polynomials are cached by the oracle). The factorized / K=3 models beat random-1 per parent only
+as much as random-2 does (a larger neighbourhood). So RL narrowed diversity, which is what the repeat penalty (E20) and the
+history-conditioned game (E23, E24) are meant to address.
+
+---
+
+## E23. Hill-climbing game, accept if not lower (no training): does chaining edits help?
+
+**Why.** Idea from the user: several single-coefficient edits in a row with the oracle's answer after each; compare with the
+alternatives at equal oracle calls. **What.** `rlmath.climb.ClimbEnv`, `experiments/climb_eval.py`: 256 parents x 32
+trajectories x 2 batches, 8 steps. A hill-climb moves to a child only if it is not lower than the current polynomial; "best of
+8" draws 8 independent single flips of the parent. Proposals: random flips, the old single-edit SFT, `q2`. Gain = best height
+reached - parent height. Raw numbers: `experiments/results/climbA.json`.
+
+| ceiling | rule | hill-climb gain@8 | best-of-8 gain@8 |
+|---|---|---|---|
+| 2 | random / SFT / `q2` | +1.19 / +1.53 / +1.45 | +1.17 / +1.40 / +1.22 |
+| 4 | random / SFT / `q2` | +0.52 / +0.69 / +0.55 | +0.52 / +0.66 / +0.48 |
+| 6 | random / SFT / `q2` | +0.21 / +0.27 / +0.26 | +0.22 / +0.28 / +0.25 |
+| 8 | random / SFT / `q2` | +0.08 / +0.10 / +0.10 | +0.08 / +0.10 / +0.10 |
+
+**Result.** (1) Chaining adds almost nothing for random proposals (hill-climb = best-of-8 within 0.02): after an improving flip a
+further one is no more likely than from the parent. (2) The supervised single-edit prior carries over, +27-32% relative gain over
+random proposals at every ceiling. (3) `q2` is worse than the SFT model it came from, again because of repeated flips.
+(4) The user then ruled accept-if-not-lower out ("it is actually bad") and asked for free exploration (E24). A first RL run on
+this version (`c1`, 8 steps, "best" reward) was stopped at iteration 362/732 and is not used.
+
+---
+
+## E24. Free-walk game with RL (repeat penalty, no acceptance rule)
+
+**Why.** The user's specification: the model gets the input polynomial, generates K single-coefficient edits, the trajectory
+**always moves to the child**, step t earns max(0, height_t - parent height) (6 -> 4,1,1,2,5,8,4,1,9 earns 0,0,0,0,0,2,0,0,3),
+and a polynomial already in the trajectory (parent included) earns -500 for that step. **What.** `rlmath-climb` (REINFORCE; a
+step's advantage = the improvement still to come after it, minus the mean over the trajectories of that parent at that step,
+divided by the batch std; the agent is told the current height and step number through zero-initialised embeddings; SFT
+single-edit init). **[choices:** a repeat's advantage is at least -10 std (`--repeat-clip`), because raw -500 would dwarf everything
+else in the normalised batch; the penalty goes to the repeating step only; 1.5M oracle calls per run; pool parents under the
+usual curriculum.**]** Runs: `d1` 8 steps (256 trajectories/iteration), `d2` 4 steps (512), `d3` 16 steps (128), and K=1 controls `c2`
+(reward child - current, the current-style reward) and `c3` (best-reached reward). Evaluation: `climb_eval.py --steps 16
+--accept always`, 256 parents x 32 trajectories x 1 batch per cell, the rule used for all steps; raw numbers
+`experiments/results/climbB.json`, formatted by `experiments/show_climb.py`.
+
+Free-walk gain (best height reached - parent) after 4 / 8 / 16 oracle calls, and the best-of-k (independent edits of the
+parent) gain after 16:
+
+| ceiling | rule | free walk @4 / @8 / @16 | best-of-k @16 |
+|---|---|---|---|
+| 2 | random | +0.50 / +0.76 / +1.15 | +1.69 |
+| 2 | old SFT | +0.94 / +1.45 / +2.04 | +1.86 |
+| 2 | `q2` | +1.00 / +1.44 / +1.79 | +1.52 |
+| 2 | `d1` / `d2` / `d3` | +0.99 / +1.48 / +2.03; +0.96 / +1.46 / +1.94; +0.94 / +1.46 / +2.06 | +1.64 / +1.37 / +1.67 |
+| 4 | random | +0.21 / +0.32 / +0.50 | +0.81 |
+| 4 | old SFT | +0.40 / +0.66 / +1.02 | +0.93 |
+| 4 | `q2` | +0.38 / +0.61 / +0.83 | +0.56 |
+| 4 | `d1` / `d2` / `d3` | +0.40 / +0.68 / +1.04; +0.41 / +0.69 / +0.99; +0.41 / +0.67 / +1.06 | +0.83 / +0.67 / +0.78 |
+| 6 | random | +0.09 / +0.14 / +0.21 | +0.37 |
+| 6 | old SFT | +0.17 / +0.29 / +0.45 | +0.39 |
+| 6 | `q2` | +0.18 / +0.28 / +0.37 | +0.36 |
+| 6 | `d1` / `d2` / `d3` | +0.17 / +0.29 / +0.44; +0.18 / +0.29 / +0.42; +0.18 / +0.28 / +0.46 | +0.31 / +0.27 / +0.32 |
+| 8 | random | +0.03 / +0.06 / +0.09 | +0.16 |
+| 8 | old SFT | +0.08 / +0.12 / +0.21 | +0.20 |
+| 8 | `q2` | +0.07 / +0.12 / +0.15 | +0.13 |
+| 8 | `d1` / `d2` / `d3` | +0.07 / +0.12 / +0.21; +0.07 / +0.12 / +0.19; +0.07 / +0.13 / +0.21 | +0.17 / +0.11 / +0.15 |
+| (K=1 controls `c2` / `c3`, ceiling 2/4/6/8, @16) | | +1.52 / +0.70 / +0.31 / +0.15; +1.89 / +0.96 / +0.41 / +0.17 | |
+
+**Result and takeaways.**
+- **RL on the game did not improve on its supervised start.** `d1`, `d2`, `d3` are within 0.01-0.05 of the old SFT model at every ceiling
+  and horizon except `d2` at ceiling 2 (-0.10 at 16 calls); mostly within 0.03 (single seed, 256 parents per cell: noise is about 0.03). During training the repeats fell to ~0% and the KL to ~0
+  (the policy froze at the end), so the penalty did stop repeats but the policy did not find a better exploration rule.
+- **The free walk is better than independent tries for the SFT prior** (+2.04 vs +1.86 at ceiling 2 after 16 calls; +1.02 vs +0.93 at
+  4) **and much worse for random flips** (+1.15 vs +1.69): a random walk drifts away to height ~1 and cannot climb back, the
+  supervised proposals stay in a useful region. For the learned prior, the walk is also better than the hill-climb of E23 at
+  ceilings 6-8 and worse at 2-4 (ceiling 2, 8 steps: +1.45 against +1.53) within noise.
+- **K=1 controls:** `c2` (current-style reward) is worse than the SFT start (it keeps the RL narrowing: best-of-16 hit 68% at
+  ceiling 2); `c3` (best reward) is close to it; neither beats SFT.
+- **What does help:** the supervised single-edit prior itself (+25-30% relative over random) and not repeating. What does not: RL
+  (this game, E15's recipe), longer trajectories (16 steps vs 8 vs 4: no clear difference), bigger edits (E21).
+- Not done: the decoder-only model that sees its own history of edits and heights; a no-replacement baseline for the SFT model.

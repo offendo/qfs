@@ -97,13 +97,22 @@ class Args:
 
 class Agent(nn.Module):
     """Parent in, child out. By default the child is sampled coefficient by coefficient; with `single` it differs
-    from the parent in exactly one coefficient, chosen with one softmax over the (position, new value) pairs."""
+    from the parent in exactly one coefficient, chosen with one softmax over the (position, new value) pairs.
+
+    With `context` the agent is also told the polynomial's current height and how many steps have been taken
+    (`ctx = (height, step)`, integer tensors), as two embeddings added to every token. They start at zero, so a
+    checkpoint trained without them (loaded with strict=False) behaves the same until they are trained."""
 
     def __init__(
-        self, p: int, n: int, d: int, d_model: int, n_layers: int, n_heads: int, d_ff: int, single: bool = False
+        self, p: int, n: int, d: int, d_model: int, n_layers: int, n_heads: int, d_ff: int, single: bool = False,
+        context: bool = False,
     ):
         super().__init__()
-        self.p, self.single = p, single
+        self.p, self.single, self.context = p, single, context
+        if context:
+            self.height_emb, self.step_emb = nn.Embedding(16, d_model), nn.Embedding(64, d_model)
+            nn.init.zeros_(self.height_emb.weight)
+            nn.init.zeros_(self.step_emb.weight)
         self.register_buffer("exponents", torch.as_tensor(monomials(n, d)), persistent=False)
         self.coeff_emb = nn.Embedding(p, d_model)
         # One table per variable, indexed by exponent; a monomial's embedding is the sum over its variables.
@@ -117,23 +126,24 @@ class Agent(nn.Module):
         nn.init.orthogonal_(self.actor.weight, 0.01)  # start close to uniform
         nn.init.zeros_(self.actor.bias)
 
-    def forward(self, obs: torch.Tensor) -> Categorical:
+    def forward(self, obs: torch.Tensor, ctx: tuple | None = None) -> Categorical:
         """obs: (B, M) coefficients in 0..p-1. Returns an independent categorical per coefficient."""
-        mono = sum(emb(self.exponents[:, j]) for j, emb in enumerate(self.exp_emb))
-        h = self.norm(self.encoder(self.coeff_emb(obs) + mono))
-        return Categorical(logits=self.actor(h))
+        x = self.coeff_emb(obs) + sum(emb(self.exponents[:, j]) for j, emb in enumerate(self.exp_emb))
+        if self.context and ctx is not None:
+            x = x + (self.height_emb(ctx[0].clamp(max=15)) + self.step_emb(ctx[1].clamp(max=63)))[:, None]
+        return Categorical(logits=self.actor(self.norm(self.encoder(x))))
 
-    def policy(self, obs: torch.Tensor) -> Categorical:
+    def policy(self, obs: torch.Tensor, ctx: tuple | None = None) -> Categorical:
         """The distribution the child is drawn from: per coefficient, or (with `single`) one over all
         (position, new value) pairs, where position * p + value indexes the pair and keeping a value is not allowed."""
-        dist = self(obs)
+        dist = self(obs, ctx)
         if not self.single:
             return dist
         logits = dist.logits.masked_fill(F.one_hot(obs, self.p).bool(), float("-inf"))
         return Categorical(logits=logits.reshape(len(obs), -1))
 
-    def get_action(self, obs: torch.Tensor):
-        dist = self.policy(obs)
+    def get_action(self, obs: torch.Tensor, ctx: tuple | None = None):
+        dist = self.policy(obs, ctx)
         sample = dist.sample()
         if not self.single:
             return sample, dist.log_prob(sample).sum(-1), dist.entropy().sum(-1), dist
@@ -143,9 +153,9 @@ class Agent(nn.Module):
         entropy = -(dist.probs * dist.logits.clamp(min=-1e4)).sum(-1)
         return child, dist.log_prob(sample), entropy, dist
 
-    def child_log_prob(self, obs: torch.Tensor, child: torch.Tensor) -> torch.Tensor:
+    def child_log_prob(self, obs: torch.Tensor, child: torch.Tensor, ctx: tuple | None = None) -> torch.Tensor:
         """Log-probability of `child` given `obs`. With `single`, child must differ from obs in exactly one coefficient."""
-        dist = self.policy(obs)
+        dist = self.policy(obs, ctx)
         if not self.single:
             return dist.log_prob(child).sum(-1)
         changed = child != obs

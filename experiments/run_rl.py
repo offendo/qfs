@@ -16,7 +16,7 @@ for stale in (db, Path(f"{db}-wal"), Path(f"{db}-shm")):
     stale.unlink(missing_ok=True)  # leftovers from an earlier run would not match the fresh copy
 shutil.copy(snapshot, db)
 cmd = [
-    "uv", "run", "rlmath-reinforce", "--p", "3", "--parent-db-frac", "1.0", "--workers", "20",
+    "uv", "run", os.environ.get("RLMATH_CMD", "rlmath-reinforce"), "--p", "3", "--parent-db-frac", "1.0", "--workers", "20",
     "--db", str(db), "--out", str(out_dir / name), *extra,
 ]
 with open(out_dir / f"{name}.log", "w") as log:
