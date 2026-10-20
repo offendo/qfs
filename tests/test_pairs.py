@@ -50,3 +50,41 @@ def test_load_scored_applies_the_smoothness_rule(tmp_path):
     assert by_key[keys[1]] == 0  # singular
     assert by_key[keys[2]] == -1  # smoothness unknown
     assert by_key[keys[3]] == 1  # height 1 needs no check
+
+
+def test_find_near_pairs_matches_brute_force():
+    from rlmath.pairs import Scored, find_near_pairs
+
+    p, m = 3, 35
+    rng = np.random.default_rng(0)
+    base = rng.integers(0, p, size=(40, m))
+    rows = [base]
+    for k in (1, 2, 3, 5):  # near neighbours of the base rows
+        near = base.copy()
+        for r in near:
+            pos = rng.choice(m, size=k, replace=False)
+            r[pos] = (r[pos] + rng.integers(1, p, size=k)) % p
+        rows.append(near)
+    digits = np.concatenate(rows)
+    first = (digits != 0).argmax(axis=1)
+    lead = digits[np.arange(len(digits)), first]
+    digits = ((digits * lead[:, None]) % p).astype(np.uint8)  # scaled to start with a 1, as in the database
+    digits = np.unique(digits, axis=0)
+    scores = rng.integers(2, 5, size=len(digits)).astype(np.int16)
+    data = Scored(digits, scores)
+
+    for max_dist in (2, 4):
+        got = find_near_pairs(data, p, max_dist, require_ge=True, device="cpu", log=lambda *_: None)
+        found = {(int(a), int(b), int(s)) for a, b, s in zip(got.parent, got.child, got.scale)}
+        assert len(found) == len(got.parent)  # no pair twice
+        expect = set()
+        for i in range(len(digits)):
+            for j in range(len(digits)):
+                for s in (1, 2):
+                    if i != j and scores[j] >= scores[i]:
+                        d = int((digits[i] != (s * digits[j].astype(int)) % p).sum())
+                        if 1 <= d <= max_dist:
+                            expect.add((i, j, s))
+        used = np.unique(np.concatenate([got.parent, got.child]))
+        assert found == expect
+        assert (got.dist >= 1).all() and (got.dist <= max_dist).all()

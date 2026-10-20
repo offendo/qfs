@@ -85,3 +85,23 @@ def test_single_edit_sft_learns_a_fixed_edit(tmp_path):
     child[:, 7] = torch.as_tensor(new[:50]).long()
     with torch.no_grad():
         assert agent.child_log_prob(obs, child).exp().mean() > 0.6  # the learned edit has most of the probability
+
+
+def test_sft_reads_near_pairs_and_filters_by_distance(tmp_path):
+    from rlmath.pairs import NearPairs
+
+    rng = np.random.default_rng(2)
+    digits = rng.integers(0, 3, size=(100, 35)).astype(np.uint8)
+    k = 300
+    pairs = NearPairs(
+        digits, rng.integers(0, 100, size=k).astype(np.int32), rng.integers(0, 100, size=k).astype(np.int32),
+        rng.integers(1, 3, size=k).astype(np.int8), rng.integers(1, 8, size=k).astype(np.int8),
+        np.full(k, 3, dtype=np.int16), np.full(k, 3, dtype=np.int16),
+    )
+    pairs.save(str(tmp_path / "near.npz"))
+    near = Args(pairs="x", out="y", max_dist=3)
+    assert (pairs.dist[select(pairs, near)] <= 3).all() and len(select(pairs, near)) < k
+    assert len(select(pairs, Args(pairs="x", out="y", max_pairs=50))) == 50
+    out = str(tmp_path / "sft.pt")
+    main(Args(pairs=str(tmp_path / "near.npz"), out=out, epochs=2, batch_size=32, max_dist=5, holdout=0.1, cuda=False, **SMALL))
+    assert torch.load(out)["args"]["max_dist"] == 5

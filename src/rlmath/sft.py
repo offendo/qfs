@@ -17,7 +17,7 @@ import numpy as np
 import torch
 import tyro
 
-from rlmath.pairs import Pairs
+from rlmath.pairs import NearPairs, Pairs
 from rlmath.polynomials import variable_permutations
 from rlmath.reinforce import Agent
 
@@ -26,12 +26,14 @@ log = logging.getLogger("rlmath.sft")
 
 @dataclass
 class Args:
-    pairs: str  # npz written by experiments/count_pairs.py
+    pairs: str  # npz written by experiments/count_pairs.py (one-coefficient pairs) or count_near_pairs.py (up to K coefficients)
     out: str  # checkpoint to write
     p: int = 3
     n: int = 4
     d: int = 4
     require: str = "ge"  # which pairs to imitate: "ge" child >= parent, "gt" child > parent, "all"
+    max_dist: int = 99  # near-pair files only: ... that differ in at most this many coefficients
+    max_pairs: int = 0  # ... and at most this many pairs, chosen at random (0 = all)
     min_parent: int = 2  # ... with parents of at least this score
     max_parent: int = 99  # ... and at most this score
     epochs: int = 8
@@ -49,23 +51,31 @@ class Args:
     d_ff: int = 512
 
 
-def select(pairs: Pairs, args: Args) -> np.ndarray:
+def select(pairs: Pairs | NearPairs, args: Args, rng: np.random.Generator | None = None) -> np.ndarray:
     keep = (pairs.parent_score >= args.min_parent) & (pairs.parent_score <= args.max_parent)
+    if isinstance(pairs, NearPairs):
+        keep &= pairs.dist <= args.max_dist
     if args.require == "ge":
         keep &= pairs.child_score >= pairs.parent_score
     elif args.require == "gt":
         keep &= pairs.child_score > pairs.parent_score
     elif args.require != "all":
         raise ValueError("require must be 'ge', 'gt' or 'all'")
-    return np.flatnonzero(keep)
+    chosen = np.flatnonzero(keep)
+    if args.max_pairs and len(chosen) > args.max_pairs:
+        chosen = np.sort((rng or np.random.default_rng(args.seed)).choice(chosen, args.max_pairs, replace=False))
+    return chosen
 
 
 def main(args: Args):
     rng = np.random.default_rng(args.seed)
     torch.manual_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
-    pairs = Pairs.load(args.pairs)
-    chosen = select(pairs, args)
+    near = "child" in np.load(args.pairs).files
+    pairs = NearPairs.load(args.pairs) if near else Pairs.load(args.pairs)
+    if near and args.single:
+        raise ValueError("--single needs one-coefficient pairs")
+    chosen = select(pairs, args, rng)
     if len(chosen) == 0:
         raise ValueError("no pairs match")
     # hold out whole parents, so the held-out loss is on polynomials the model has not seen
@@ -74,17 +84,26 @@ def main(args: Args):
     train = chosen[~held_parents[pairs.parent[chosen]]]
     log.info("%d pairs selected (%d train, %d held out); parent scores %s", len(chosen), len(train), len(test),
              {int(s): int((pairs.parent_score[chosen] == s).sum()) for s in np.unique(pairs.parent_score[chosen])})
+    if near:
+        log.info("distances %s", {int(d): int((pairs.dist[chosen] == d).sum()) for d in np.unique(pairs.dist[chosen])})
 
     table = torch.as_tensor(pairs.digits, device=device)
     parent = torch.as_tensor(pairs.parent, device=device).long()
-    pos = torch.as_tensor(pairs.pos, device=device).long()
-    new = torch.as_tensor(pairs.new, device=device).long()
+    if near:
+        child_row = torch.as_tensor(pairs.child, device=device).long()
+        scale = torch.as_tensor(pairs.scale, device=device).long()
+    else:
+        pos = torch.as_tensor(pairs.pos, device=device).long()
+        new = torch.as_tensor(pairs.new, device=device).long()
     perms = torch.as_tensor(variable_permutations(args.n, args.d), device=device)
 
     def batch(idx: torch.Tensor, augment: bool):
         obs = table[parent[idx]].long()
-        child = obs.clone()
-        child[torch.arange(len(idx), device=device), pos[idx]] = new[idx]
+        if near:
+            child = (scale[idx, None] * table[child_row[idx]].long()) % args.p
+        else:
+            child = obs.clone()
+            child[torch.arange(len(idx), device=device), pos[idx]] = new[idx]
         if augment:
             sigma = perms[torch.randint(len(perms), (len(idx),), device=device)]
             obs, child = obs.gather(1, sigma), child.gather(1, sigma)

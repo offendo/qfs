@@ -619,3 +619,65 @@ The untrained policy's rate (first quarter of `n0`) is the reference: 2.5 / 0.27
 - On the worry that the policy can't see the seen set: it does not need to. A stochastic policy gets a diminishing reward for
   concentrating mass, which is what stopped the collapse here. What it can't do is create a gradient toward high
   polynomials when almost nothing it samples is rewarded.
+
+---
+
+## E21. SFT on pairs that differ in up to K coefficients (K = 1, 3, 5, 7)
+
+**Why.** Request from the user: widen the pair search from one changed coefficient to at most K, and sweep K = 1, 3, 5, 7.
+**What.** `find_near_pairs` (`src/rlmath/pairs.py`) mines every pair of database polynomials (both known with score >= 2) that
+differ in 1..K coefficients, child >= parent. Method: split the 35 coefficients into K + 1 blocks (two vectors within K
+differences share a whole block), join on block contents, compare candidates on the GPU with bit-packed vectors, and look at
+each child under every scalar multiple; checked against brute force in a test. K = 7 took 164 s on 12.1M polynomials
+(1.5 min for K = 3). Pairs (child >= parent, score >= 2, parents with a pair 2.18M):
+
+| distance | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+|---|---|---|---|---|---|---|---|
+| pairs | 1,371,669 | 1,439,520 | 1,985,157 | 2,848,361 | 3,852,791 | 4,904,951 | 6,265,695 |
+
+(The distance-1 count equals the E0 count.) 22.7M pairs in total; 88% have parent height 2. `rlmath-sft` reads these files
+(`--max-dist K`, `--max-pairs N`); K = 1..7 are filtered from the one K = 7 file. Factorized policy (the single-edit head does
+only one change), `--require ge`, 2 seeds. **[choices:** sweep A uses the same number of pairs for every K (1,371,669 = all of K = 1,
+random subsample otherwise) and the same number of steps, so the data content is what varies; sweep B (one seed) gives K >= 3 more pairs
+(all 4.8M for K = 3, 5.5M subsamples for K = 5, 7) for the same number of steps.**]** Evaluation H: the E18 protocol with random-1/2/3/5/7.
+
+Improvement (child - parent; higher is better), policies' mean edit size in the last column (ceiling 4):
+
+| method | ceiling 2 | ceiling 4 | ceiling 6 | ceiling 8 | mean edit |
+|---|---|---|---|---|---|
+| random-1 / 3 / 5 / 7 | -0.549 / -0.795 / -0.832 / -0.843 | -1.778 / -2.009 / -2.054 / -2.064 | -3.193 / -3.433 / -3.479 / -3.490 | -4.782 / -5.022 / -5.063 / -5.087 | 1 / 3 / 5 / 7 |
+| K=1 (2 seeds) | -0.333, -0.348 | -1.558, -1.570 | -2.997, -2.989 | -4.580, -4.587 | 1.54 |
+| K=3 (2 seeds) | -0.447, -0.453 | -1.649, -1.659 | -3.081, -3.092 | -4.682, -4.675 | 2.30 |
+| K=5 (2 seeds) | -0.571, -0.576 | -1.782, -1.786 | -3.224, -3.220 | -4.810, -4.817 | 3.41 |
+| K=7 (2 seeds) | -0.697, -0.713 | -1.921, -1.926 | -3.347, -3.352 | -4.940, -4.943 | 4.81 |
+| B: K=3 / 5 / 7 | -0.443 / -0.575 / -0.713 | -1.662 / -1.792 / -1.919 | -3.086 / -3.226 / -3.347 | -4.669 / -4.801 / -4.946 | 2.31 / 3.40 / 4.82 |
+| old single-edit SFT / `q2` | -0.302 / -0.277 | -1.523 / -1.494 | -2.952 / -2.914 | -4.530 / -4.509 | 1.00 |
+
+Gain over a random edit of the same mean size (interpolating between the random-k rows; mean of 2 seeds for A):
+
+| policy | ceiling 2 | ceiling 4 | ceiling 6 | ceiling 8 |
+|---|---|---|---|---|
+| K=1 | +0.300 | +0.302 | +0.294 | +0.298 |
+| K=3 | +0.290 | +0.306 | +0.300 | +0.302 |
+| K=5 | +0.228 | +0.234 | +0.220 | +0.217 |
+| K=7 | +0.123 | +0.126 | +0.125 | +0.117 |
+| B: K=3 / 5 / 7 (ceiling 4) | | +0.299 / +0.225 / +0.131 | | |
+| old single-edit SFT / `q2` | +0.247 / +0.272 | +0.254 / +0.283 | +0.241 / +0.279 | +0.253 / +0.273 |
+
+**Result and takeaways.**
+- **Larger K does not help the improvement metric; the absolute result gets worse in proportion to the edit size.**
+  Improvement falls from -0.34 (K = 1) to -0.70 (K = 7) at ceiling 2, and at every ceiling the order is K=1 > 3 > 5 > 7.
+  Most of that is because a bigger edit is a worse edit: random-7 is 0.29 below random-1.
+- **Against a random edit of the same size the picture is flat-then-falling:** K = 1 and K = 3 give the same lift
+  (+0.30), K = 5 +0.22-0.23, K = 7 +0.12. So the model learns the edits well for small K and less for large ones, but it
+  never learns a larger-edit rule that beats small ones. Seeds agree to 0.01-0.015, which is much smaller than the K gaps.
+- **More data (sweep B) changes nothing** (K = 3: +0.299 against +0.306; K = 5: +0.225 against +0.234; K = 7: +0.131 against +0.126;
+  within seed spread), so what limits large K is not the number of pairs. A plausible reason (not tested): pairs at larger
+  distance are mostly unrelated polynomials from the same local-search neighbourhood, so the child is not a function of the parent.
+- The policy's mean edit is smaller than K (1.54, 2.30, 3.41, 4.81 for K = 1, 3, 5, 7), the SFT mass concentrates on the nearer pairs.
+- **Best factorized K = 1/3 policies (+0.30) beat the single-edit SFT (+0.25) on this lift measure, but not `q2` in absolute
+  terms (their edits are 1.5-2.3 coefficients long, against exactly 1).** The share of children at least as high as the parent
+  is also highest for `q2` (69.2% at ceiling 2), then K = 1 (66%).
+- Nothing keeps high parents: at ceiling 8 the share of children >= parent is 5.2% (K = 1) and 2.7% (K = 7) against 3.4% for random-1.
+- Not done: RL after these SFT starts; evaluation of K = 3 beyond the lift measure; the pairs file is not saved (85 MB+; rerun
+  `experiments/count_near_pairs.py`). Held-out loss is not comparable across K (the target space grows).

@@ -71,6 +71,7 @@ Improvement (higher is better); all numbers from evaluations F and G (`experimen
 | E17 | edit chosen for another parent | every policy except `q2` keeps 74-91% of its gain over random: mostly parent-independent |
 | E18 | corrected final comparison | confirms the ranking; no policy keeps high parents better than random |
 | E19 | `q2` seeds 2 and 3, `q4` (SFT init, curriculum from 6) | robust across seeds; parent dependence varies 0.08-0.20 |
+| E21 | SFT on pairs within K = 1, 3, 5, 7 coefficients (22.7M pairs mined) | lift over a same-size random edit: +0.30 / +0.30 / +0.22 / +0.12; absolute improvement worsens with K; 4x more data changes nothing |
 | E20 | repeat penalty (seen set from scratch, no Hamming penalty, copy 100) | stops collapse; no learning from scratch (new>=6: 2.5 -> 2.8 per 1024); SFT start gives 3x but RL adds nothing |
 
 ## What I learned
