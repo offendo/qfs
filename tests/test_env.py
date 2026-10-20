@@ -75,10 +75,14 @@ def test_parents_switch_to_the_pool_once_it_is_big_enough(tmp_path):
     env = make_env(tmp_path, parent_db_frac=1.0, parent_min_height=2, parent_db_min_size=40)
     env.reset(seed=0)
     assert len(env.pool) < 40 and not (env.parent_scores >= 2).all()  # pool too small: random parents
+    assert not env.from_pool.any()
     for _ in range(5):
         env.step(env.action_space.sample())  # the children it scores fill the pool
     assert len(env.pool) >= 40
     assert (env.parent_scores >= 2).all()  # parents now come from the pool
+    assert env.from_pool.all()
+    _, _, _, _, info = env.step(env.action_space.sample())
+    assert info["from_pool"].all()  # reported for the parents the step acted on
     env.close()
 
 
