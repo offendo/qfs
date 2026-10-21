@@ -828,3 +828,65 @@ Share of parents for which some trajectory improved (best of 16): old SFT 99.6/8
   +1.18 vs +1.05), the opposite of the E24 result with repeats, where the walk helped because it avoided them.
 - Caveat: one batch of 256 parents per cell (noise about 0.03-0.05); the mask is exact for single flips of a fixed parent and approximate
   for the walk (it also forbids stepping back).
+
+
+---
+
+## E26. Long run: 10M-parameter model, 40-step free walk, 12 hours of RL
+
+**Why.** The user: "take a long walk (40) trajectory RL run, starting from an sft model, and let it train for like 12 hours. Make the
+model big, about 10 million parameters. Sometimes it takes a while for RL to work." **What.** The E24 game (free walk, reward max(0,
+height - parent height) per step, repeat penalty 500 with the -10 std clip, context embeddings for height and step) with 40 steps per
+trajectory. **[choices:** model 10 layers, width 288, 8 heads, feed-forward 1152 = 10.02M parameters (the closest of a few shapes
+to 10M); supervised single-edit start of that size (8 epochs on the 1.37M one-edit pairs, held-out NLL 3.163 against 3.182 for the
+0.8M model: model size barely matters for SFT); learning rate 1e-4 (not 3e-4, for the deeper model) decaying linearly over the
+12 hours; 512 trajectories per iteration (16 parents x 32); the parent curriculum as before; 32 Julia workers; single seed.**]**
+Command: `rlmath-climb --steps 40 --num-envs 512 --children-per-parent 32 --max-hours 12 --learning-rate 1e-4 --init big_single.pt
+--d-model 288 --n-layers 10 --n-heads 8 --d-ff 1152 --snapshot-every 400`. Ran 3,113 iterations = 61.2M oracle calls (43,204 s);
+the final parent ceiling was 9. Final weights: `experiments/checkpoints/long40_final.pt`; log `experiments/results/train_long40.log.gz`.
+
+Training curve (10 equal blocks of iterations; "gain" = best height reached - parent, on the curriculum's current parents, so it
+falls when the ceiling rises):
+
+| iterations | gain | success | repeats | KL per step | ceiling | parents with some success |
+|---|---|---|---|---|---|---|
+| 1-311 | +0.834 | 37.7% | 0.54% | 0.0082 | 6.7 | 77% |
+| 312-622 | +0.414 | 20.7% | 0.01% | 0.0047 | 8.0 | 66% |
+| 934-1244 | +0.389 | 19.9% | 0.02% | 0.0016 | 8.0 | 65% |
+| 1556-1866 | +0.388 | 19.9% | 0.00% | 0.0015 | 8.0 | 67% |
+| 2178-2488 | +0.299 | 15.0% | 0.01% | 0.0008 | 9.0 | 48% |
+| 2800-3110 | +0.276 | 13.9% | 0.00% | 0.0000 | 9.0 | 47% |
+
+Evaluation on frozen parents (E24 protocol, 40 calls, 192 parents x 16 trajectories per cell, the same parents for all rules; raw numbers
+`climbD.json`, `climbE.json`). Free walk, best height reached - parent after 8 / 16 / 40 oracle calls:
+
+| ceiling | random | small SFT (0.8M) | big SFT start | long run, iteration 400 | iteration 2000 | final |
+|---|---|---|---|---|---|---|
+| 2 | +0.79 / +1.17 / +1.90 | +1.49 / +2.08 / +2.82 | +1.47 / +2.04 / +2.82 | +1.52 / +2.10 / +2.86 | +1.52 / +2.09 / +2.89 | +1.50 / +2.09 / +2.90 |
+| 4 | +0.32 / +0.49 / +0.90 | +0.64 / +0.99 / +1.65 | +0.60 / +0.98 / +1.59 | +0.68 / +1.08 / +1.69 | +0.70 / +1.08 / +1.74 | +0.69 / +1.08 / +1.75 |
+| 6 | +0.13 / +0.20 / +0.39 | +0.30 / +0.47 / +0.78 | +0.29 / +0.46 / +0.79 | +0.30 / +0.47 / +0.80 | +0.31 / +0.49 / +0.82 | +0.28 / +0.45 / +0.80 |
+| 8 | +0.06 / +0.10 / +0.17 | +0.13 / +0.21 / +0.37 | +0.12 / +0.20 / +0.37 | +0.13 / +0.21 / +0.37 | +0.14 / +0.22 / +0.39 | +0.14 / +0.23 / +0.41 |
+
+(The small and big SFT start rows come from separate runs of the evaluation; they differ by up to 0.06.) The cheap no-training rules,
+after 40 calls:
+
+| ceiling | free walk, final model | free walk, SFT + no repeats | best of 40 independent flips, SFT + no repeats | same, final model + no repeats |
+|---|---|---|---|---|
+| 2 | +2.88 | +2.88 | **+3.07** | +2.80 |
+| 4 | +1.70 | +1.69 | **+1.75** | +1.54 |
+| 6 | +0.79 | +0.78 | +0.76 | +0.64 |
+| 8 | +0.36 | +0.39 | **+0.43** | +0.38 |
+
+**Result and takeaways.**
+- **12 hours of RL on a 10M-parameter model barely moved the policy.** At 40 calls the final model is +0.06 to +0.08 ahead of the
+  small supervised model at ceiling 2 and +0.06 to +0.10 at ceiling 4, level at 6 and 8, i.e. at the edge of the noise (about 0.05 with 192 parents). Most of
+  even that was reached by iteration 400 (ceiling 4: +1.59 for the big start, +1.69 at iteration 400, +1.75 at the end); iterations
+  400-3113 added at most 0.06.
+- **The policy froze, not diverged**: KL per step fell 0.008 -> 0.0000, repeats went to about 0%, and the training "gain" fell only
+  because the curriculum raised the parent ceiling from 6.7 to 9 (the frozen-parent evaluation shows no decline).
+- **No-replacement best-of sampling from the supervised model is as good or better than the trained walker**: +3.07 / +1.75 / +0.76 /
+  +0.43 against +2.88 / +1.70 / +0.79 / +0.36 for the final model's free walk (differences 0.19 at ceiling 2, otherwise noise).
+- **The trained model is a worse independent sampler than the supervised one** (best of 40 with no repeats: +2.80 / +1.54 / +0.64 against
+  +3.07 / +1.75 / +0.76): RL for the walk narrowed its distribution again.
+- Not tried: a history-conditioned decoder; entropy bonus or a larger learning rate; more parents per iteration; more seeds. A larger
+  gap may need an objective that rewards what the walk gains over the best baseline rather than over the parent.

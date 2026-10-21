@@ -76,6 +76,7 @@ Improvement (higher is better); all numbers from evaluations F and G (`experimen
 | E23 | hill-climb (accept if not lower) vs best-of-k, no training | chaining adds nothing for random proposals; the SFT prior gives +27-32% relative |
 | E24 | free-walk game (always move, reward max(0, h - parent), repeat penalty), RL K = 4 / 8 / 16 | RL does not beat its SFT start; free walk beats independent tries for the SFT prior, loses for random |
 | E25 | no-replacement mask on the existing models, no training | **best no-training rule so far**: SFT best-of-16 without repeats beats every RL free-walk model by 0.12-0.16 at ceilings 2-4; `q2` was only hurt by repeats |
+| E26 | 10M-parameter model, 40-step free walk, 12 h of RL (61M oracle calls) | barely moves from its SFT start (+0.06-0.10 at ceilings 2-4, level at 6-8); matches but does not beat SFT best-of-40 without repeats |
 | E20 | repeat penalty (seen set from scratch, no Hamming penalty, copy 100) | stops collapse; no learning from scratch (new>=6: 2.5 -> 2.8 per 1024); SFT start gives 3x but RL adds nothing |
 
 ## What I learned
