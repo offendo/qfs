@@ -16,7 +16,7 @@ import numpy as np
 import torch
 
 from evaluate import load_agent
-from rlmath.climb import ClimbEnv, play, policy_proposer, random_flips
+from rlmath.climb import ClimbEnv, no_replacement_proposer, play, policy_proposer, random_flips
 
 
 def main():
@@ -27,6 +27,7 @@ def main():
     ap.add_argument("--ckpt", action="append", default=[], help="name=path")
     ap.add_argument("--steps", type=int, default=8)
     ap.add_argument("--modes", nargs="+", default=["walk", "bestof"], choices=["walk", "bestof"])
+    ap.add_argument("--no-replacement", action="store_true", help="also run every rule never proposing a polynomial already in the trajectory")
     ap.add_argument("--accept", default="always", choices=["always", "not_lower"], help="rule of the hill-climb rows")
     ap.add_argument("--per-parent", type=int, default=32)
     ap.add_argument("--parents-per-batch", type=int, default=256)
@@ -42,6 +43,9 @@ def main():
         name, path = item.split("=", 1)
         agent = load_agent(path, device)
         rules[name] = lambda rng, agent=agent: policy_proposer(agent, device)
+    if args.no_replacement:
+        for name, agent in [("random", None)] + [(n, load_agent(path, device)) for n, path in (i.split("=", 1) for i in args.ckpt)]:
+            rules[name + "+norepl"] = lambda rng, agent=agent: no_replacement_proposer(agent, device, args.p)
 
     env = ClimbEnv(
         args.per_parent * args.parents_per_batch, args.p, workers=args.workers, db=args.db, parent_db_frac=1.0,

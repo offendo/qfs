@@ -55,6 +55,23 @@ def test_a_polynomial_already_in_the_trajectory_is_a_repeat(tmp_path):
     env.close()
 
 
+def test_no_replacement_proposer_never_repeats(tmp_path):
+    from rlmath.climb import no_replacement_proposer
+
+    for walk in (True, False):
+        env = ClimbEnv(16, p=3, workers=2, db=str(tmp_path / f"h{walk}.sqlite"), steps=12, walk=walk)
+        env.reset(seed=0)
+        game = play(env, no_replacement_proposer(None, torch.device("cpu"), 3))
+        assert not game["repeat"].any()
+        env.close()
+    agent = Agent(3, 4, 4, 32, 2, 4, 64, single=True, context=True)
+    env = ClimbEnv(16, p=3, workers=2, db=str(tmp_path / "hp.sqlite"), steps=12)
+    env.reset(seed=1)
+    game = play(env, no_replacement_proposer(agent, torch.device("cpu"), 3))
+    assert not game["repeat"].any() and ((game["child"] != game["obs"]).sum(axis=2) == 1).all()
+    env.close()
+
+
 def test_walk_false_keeps_the_trajectory_at_the_parent(tmp_path):
     env = make_env(tmp_path, walk=False)
     env.reset(seed=0)
@@ -88,3 +105,15 @@ def test_climb_trains_and_the_context_starts_as_a_no_op(tmp_path):
     assert ckpt["args"]["context"] and ckpt["args"]["single"]
     proposed = policy_proposer(agent, torch.device("cpu"))(obs.numpy(), np.array([1, 2, 3, 4, 5]), 0)
     assert ((proposed != obs.numpy()).sum(axis=1) == 1).all()
+
+
+def test_resume_continues_the_run_and_max_hours_stops_it(tmp_path):
+    common = dict(p=3, num_envs=16, children_per_parent=4, steps=3, workers=2, parent_db_frac=0.0, cuda=False, curriculum_start=0,
+                  db=str(tmp_path / "heights.sqlite"), save_every=1, **SMALL)
+    main(Args(total_timesteps=2 * 16 * 3, out=str(tmp_path / "a"), **common))
+    first = torch.load(tmp_path / "a" / "model.pt")
+    assert first["iteration"] == 2 and "optimizer" in first
+    main(Args(total_timesteps=4 * 16 * 3, out=str(tmp_path / "b"), resume=str(tmp_path / "a" / "model.pt"), **common))
+    assert torch.load(tmp_path / "b" / "model.pt")["iteration"] == 4
+    main(Args(total_timesteps=100 * 16 * 3, max_hours=1e-6, out=str(tmp_path / "c"), **common))  # stops at once
+    assert torch.load(tmp_path / "c" / "model.pt")["iteration"] < 5  # nowhere near the 100 asked for

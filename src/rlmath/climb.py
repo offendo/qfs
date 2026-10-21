@@ -119,6 +119,49 @@ def policy_proposer(agent: Agent, device):
     return propose
 
 
+def no_replacement_proposer(agent: Agent | None, device, p: int):
+    """Like `policy_proposer` (uniform over single flips if `agent` is None), but never proposes a polynomial that already
+    occurred in the trajectory (the parent, earlier children, the polynomial the trajectory is standing on), up to scaling.
+
+    Make a new one for every game: it remembers the polynomials seen so far.
+    """
+    visited: list[set] | None = None
+
+    def codes(x: np.ndarray) -> np.ndarray:  # base-p integer of each row, scaled to start with a 1
+        return (normalize(x, p).astype(np.int64) * p ** np.arange(x.shape[1], dtype=np.int64)).sum(axis=1)
+
+    def propose(obs: np.ndarray, score: np.ndarray, t: int) -> np.ndarray:
+        nonlocal visited
+        n, m = obs.shape
+        if visited is None:
+            visited = [set() for _ in range(n)]
+        for v, c in zip(visited, codes(obs)):
+            v.add(int(c))
+        with torch.no_grad():
+            obs_t = torch.as_tensor(obs, device=device)
+            if agent is None:
+                logits = torch.zeros(n, m, p, device=device)
+            else:
+                ctx = (torch.as_tensor(score, device=device).long(), torch.full((n,), t, device=device))
+                logits = agent(obs_t, ctx).logits
+            logits = logits.masked_fill(torch.nn.functional.one_hot(obs_t, p).bool(), float("-inf")).reshape(n, m * p)
+        # the polynomial reached by each of the m * p (position, value) choices
+        cand = np.repeat(obs[:, None, :], m * p, axis=1)
+        pos, val = np.divmod(np.arange(m * p), p)
+        cand[:, np.arange(m * p), pos] = val
+        cand_codes = codes(cand.reshape(n * m * p, m)).reshape(n, m * p)
+        seen = np.array([[c in v for c in row] for row, v in zip(cand_codes.tolist(), visited)])
+        logits = logits.masked_fill(torch.as_tensor(seen, device=device), float("-inf"))
+        pick = Categorical(logits=logits).sample().cpu().numpy()
+        child = obs.copy()
+        child[np.arange(n), pick // p] = pick % p
+        for v, c in zip(visited, codes(child)):
+            v.add(int(c))
+        return child
+
+    return propose
+
+
 @dataclass
 class Args(ReinforceArgs):
     exp_name: str = "climb"
@@ -126,6 +169,9 @@ class Args(ReinforceArgs):
     reward: str = "improve"  # "improve": max(0, child - parent) per step; "best": gain in best height; "child": child - current
     repeat_penalty: float = 500.0  # reward of a step whose polynomial already occurred in its trajectory (it replaces the improvement)
     repeat_clip: float = 10.0  # ... but in standard-deviation units its advantage is at least -this, so it cannot swamp the batch
+    max_hours: float = 0.0  # stop after this much wall-clock time (0 = run all iterations); the learning rate decays over it
+    snapshot_every: int = 0  # also keep a weights-only copy model_<iteration>.pt every this many iterations
+    resume: str = ""  # continue from a model.pt written by this script (weights, optimizer and clock)
     accept: str = "always"  # "always": the trajectory moves to every child; "not_lower": only to children not lower than it
     single: bool = True
     context: bool = True  # tell the agent the current height and the step number
@@ -171,15 +217,32 @@ def main(args: Args):
     num_iterations = args.total_timesteps // per_iteration
     log.info("writing to %s; device %s; %d Julia workers; %d iterations", out, device, envs.oracle.n_workers, num_iterations)
 
-    def save():
-        torch.save({"args": asdict(args), "model": agent.state_dict()}, out / "model.pt")
+    progress = {"iteration": 0, "elapsed": 0.0, "ceiling": args.curriculum_start}
 
-    ceiling, successes, best_seen, start = args.curriculum_start, [], 0, time.time()
+    def save():
+        torch.save({"args": asdict(args), "model": agent.state_dict(), "optimizer": optimizer.state_dict(), **progress}, out / "model.pt")
+
+    start_iteration, offset = 1, 0.0
+    if args.resume:
+        ckpt = torch.load(args.resume, map_location=device)
+        agent.load_state_dict(ckpt["model"])
+        optimizer.load_state_dict(ckpt["optimizer"])
+        start_iteration, offset = ckpt["iteration"] + 1, ckpt["elapsed"]
+        args.curriculum_start = ckpt.get("ceiling", args.curriculum_start)
+        log.info("resuming from iteration %d after %.1f hours", ckpt["iteration"], offset / 3600)
+    ceiling, successes, best_seen, start = args.curriculum_start, [], 0, time.time() - offset
+    envs.parent_max_height = ceiling or None
     propose = policy_proposer(agent, device)
     try:
-        for iteration in range(1, num_iterations + 1):
+        for iteration in range(start_iteration, num_iterations + 1):
+            elapsed = time.time() - start
+            if args.max_hours and elapsed >= args.max_hours * 3600:
+                log.info("time limit reached after %d iterations", iteration - 1)
+                break
             if args.anneal_lr:
-                optimizer.param_groups[0]["lr"] = (1.0 - (iteration - 1.0) / num_iterations) * args.learning_rate
+                done = max((iteration - 1.0) / num_iterations, elapsed / (args.max_hours * 3600) if args.max_hours else 0.0)
+                optimizer.param_groups[0]["lr"] = (1.0 - done) * args.learning_rate
+            progress["iteration"], progress["elapsed"] = iteration - 1, elapsed
             envs.reset()
             game = play(envs, propose)
             steps, n = game["child"].shape[:2]
@@ -265,9 +328,13 @@ def main(args: Args):
                 100 * metrics["charts/accepted"], best_seen, len(envs.pool), metrics["charts/oracle_calls"],
                 metrics["charts/SPS"], metrics["losses/kl_step"], ceiling, 100 * group_hit,
             )
+            progress["iteration"], progress["elapsed"], progress["ceiling"] = iteration, time.time() - start, ceiling
             if iteration % args.save_every == 0:
                 save()
+            if args.snapshot_every and iteration % args.snapshot_every == 0:
+                torch.save({"args": asdict(args), "model": agent.state_dict()}, out / f"model_{iteration}.pt")  # weights only, to evaluate
     finally:
+        progress["elapsed"] = time.time() - start
         save()
         envs.close()
         if args.track:
