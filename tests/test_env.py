@@ -4,7 +4,7 @@ from rlmath.env import PolyEnv
 
 
 def make_env(tmp_path, **kw):
-    return PolyEnv(num_envs=64, p=3, workers=2, db=str(tmp_path / "heights.sqlite"), **kw)
+    return PolyEnv(num_envs=64, p=3, db=str(tmp_path / "heights.sqlite"), **kw)
 
 
 def test_spaces_and_reset(tmp_path):
@@ -130,7 +130,7 @@ def test_hamming_penalty_has_a_free_budget(tmp_path):
 
 
 def test_children_share_a_parent_within_a_group(tmp_path):
-    env = PolyEnv(num_envs=48, p=3, workers=2, db=str(tmp_path / "heights.sqlite"), children_per_parent=8)
+    env = PolyEnv(num_envs=48, p=3, db=str(tmp_path / "heights.sqlite"), children_per_parent=8)
     obs, _ = env.reset(seed=0)
     groups = obs.reshape(6, 8, 35)
     assert (groups == groups[:, :1]).all()  # the 8 rows of a group are the same parent
@@ -139,7 +139,7 @@ def test_children_share_a_parent_within_a_group(tmp_path):
     assert (info["parent_score"].reshape(6, 8) == info["parent_score"].reshape(6, 8)[:, :1]).all()
     env.close()
     try:
-        PolyEnv(num_envs=50, p=3, workers=1, children_per_parent=8)
+        PolyEnv(num_envs=50, p=3, children_per_parent=8)
     except ValueError:
         pass
     else:
@@ -148,7 +148,7 @@ def test_children_share_a_parent_within_a_group(tmp_path):
 
 def test_parent_max_height_caps_pool_parents(tmp_path):
     env = PolyEnv(
-        num_envs=64, p=3, workers=2, db=str(tmp_path / "heights.sqlite"), parent_db_frac=1.0, parent_db_min_size=30,
+        num_envs=64, p=3, db=str(tmp_path / "heights.sqlite"), parent_db_frac=1.0, parent_db_min_size=30,
         parent_max_height=3,
     )
     env.reset(seed=0)

@@ -8,7 +8,7 @@ SMALL = dict(d_model=32, n_layers=2, n_heads=4, d_ff=64)
 
 
 def make_env(tmp_path, **kw):
-    return ClimbEnv(64, p=3, workers=2, db=str(tmp_path / "heights.sqlite"), steps=3, **kw)
+    return ClimbEnv(64, p=3, db=str(tmp_path / "heights.sqlite"), steps=3, **kw)
 
 
 def test_trajectory_never_goes_down_and_best_is_monotone(tmp_path):
@@ -59,13 +59,13 @@ def test_no_replacement_proposer_never_repeats(tmp_path):
     from rlmath.climb import no_replacement_proposer
 
     for walk in (True, False):
-        env = ClimbEnv(16, p=3, workers=2, db=str(tmp_path / f"h{walk}.sqlite"), steps=12, walk=walk)
+        env = ClimbEnv(16, p=3, db=str(tmp_path / f"h{walk}.sqlite"), steps=12, walk=walk)
         env.reset(seed=0)
         game = play(env, no_replacement_proposer(None, torch.device("cpu"), 3))
         assert not game["repeat"].any()
         env.close()
     agent = Agent(3, 4, 4, 32, 2, 4, 64, single=True, context=True)
-    env = ClimbEnv(16, p=3, workers=2, db=str(tmp_path / "hp.sqlite"), steps=12)
+    env = ClimbEnv(16, p=3, db=str(tmp_path / "hp.sqlite"), steps=12)
     env.reset(seed=1)
     game = play(env, no_replacement_proposer(agent, torch.device("cpu"), 3))
     assert not game["repeat"].any() and ((game["child"] != game["obs"]).sum(axis=2) == 1).all()
@@ -99,7 +99,7 @@ def test_climb_trains_and_the_context_starts_as_a_no_op(tmp_path):
     plain = agent(obs).logits
     with_ctx = agent(obs, (torch.full((5,), 4), torch.full((5,), 2))).logits
     assert torch.allclose(plain, with_ctx)  # zero-initialized embeddings
-    main(Args(p=3, total_timesteps=2 * 8 * 8, num_envs=16, children_per_parent=4, steps=8, workers=2, parent_db_frac=0.0,
+    main(Args(p=3, total_timesteps=2 * 8 * 8, num_envs=16, children_per_parent=4, steps=8, parent_db_frac=0.0,
               db=str(tmp_path / "heights.sqlite"), out=str(tmp_path / "run"), cuda=False, curriculum_start=0, **SMALL))
     ckpt = torch.load(tmp_path / "run" / "model.pt")
     assert ckpt["args"]["context"] and ckpt["args"]["single"]
@@ -108,7 +108,7 @@ def test_climb_trains_and_the_context_starts_as_a_no_op(tmp_path):
 
 
 def test_resume_continues_the_run_and_max_hours_stops_it(tmp_path):
-    common = dict(p=3, num_envs=16, children_per_parent=4, steps=3, workers=2, parent_db_frac=0.0, cuda=False, curriculum_start=0,
+    common = dict(p=3, num_envs=16, children_per_parent=4, steps=3, parent_db_frac=0.0, cuda=False, curriculum_start=0,
                   db=str(tmp_path / "heights.sqlite"), save_every=1, **SMALL)
     main(Args(total_timesteps=2 * 16 * 3, out=str(tmp_path / "a"), **common))
     first = torch.load(tmp_path / "a" / "model.pt")

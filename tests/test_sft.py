@@ -59,7 +59,7 @@ def test_sft_learns_a_fixed_edit_and_feeds_reinforce(tmp_path):
     assert probs[torch.arange(50), 7, torch.as_tensor(new[:50]).long()].mean() > 0.6
 
     rl_main(RLArgs(
-        p=3, total_timesteps=128, num_envs=64, children_per_parent=8, workers=2, cuda=False, out=str(tmp_path / "rl"),
+        p=3, total_timesteps=128, num_envs=64, children_per_parent=8, cuda=False, out=str(tmp_path / "rl"),
         db=str(tmp_path / "heights.sqlite"), init=out, kl_coef=0.05, **SMALL,
     ))
     assert (tmp_path / "rl" / "model.pt").exists()

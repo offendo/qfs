@@ -96,14 +96,14 @@ def main():
     ap.add_argument("--baselines", type=int, nargs="*", default=[1, 2, 3])
     ap.add_argument("--ckpt", action="append", default=[], help="name=path")
     ap.add_argument("--batches", type=int, default=40)
-    ap.add_argument("--workers", type=int, default=20)
+    ap.add_argument("--urls", nargs="+", default=["http://127.0.0.1:8080"])
     ap.add_argument("--temperature", type=float, default=3.0, help="parent temperature")
     ap.add_argument("--keep-copies", action="store_true", help="do not redraw children that equal their parent")
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    env = PolyEnv(1024, args.p, workers=args.workers, db=args.db, parent_db_frac=1.0, parent_temperature=args.temperature)
+    env = PolyEnv(1024, args.p, urls=tuple(args.urls), db=args.db, parent_db_frac=1.0, parent_temperature=args.temperature)
     env._remember = lambda coeffs, scores: None  # freeze the pool, so every method sees identical parents
     rng = np.random.default_rng(0)
     methods = {f"random-{k}": random_edit(rng, args.p, k) for k in args.baselines}

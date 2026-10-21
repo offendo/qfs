@@ -32,7 +32,7 @@ def main():
     ap.add_argument("--per-parent", type=int, default=32)
     ap.add_argument("--parents-per-batch", type=int, default=256)
     ap.add_argument("--batches", type=int, default=2)
-    ap.add_argument("--workers", type=int, default=20)
+    ap.add_argument("--urls", nargs="+", default=["http://127.0.0.1:8080"])
     ap.add_argument("--temperature", type=float, default=3.0)
     ap.add_argument("--out", default="")
     args = ap.parse_args()
@@ -48,7 +48,7 @@ def main():
             rules[name + "+norepl"] = lambda rng, agent=agent: no_replacement_proposer(agent, device, args.p)
 
     env = ClimbEnv(
-        args.per_parent * args.parents_per_batch, args.p, workers=args.workers, db=args.db, parent_db_frac=1.0,
+        args.per_parent * args.parents_per_batch, args.p, urls=tuple(args.urls), db=args.db, parent_db_frac=1.0,
         parent_temperature=args.temperature, children_per_parent=args.per_parent, steps=args.steps, accept=args.accept,
     )
     env._remember = lambda coeffs, scores: None  # frozen pool: identical parents for every method

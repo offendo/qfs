@@ -61,7 +61,7 @@ class Args:
     hamming_penalty: float = 0.5  # reward lost per coefficient changed beyond hamming_free (to be tuned)
     copy_penalty: float = 100.0  # reward lost when the child is exactly the parent
     repeat_penalty: float = 0.0  # reward of a child already generated earlier in this run is -this (0 = off, repeats still logged)
-    workers: int = 0  # Julia worker processes (0 = number of CPUs - 1)
+    urls: tuple[str, ...] = ("http://127.0.0.1:8080",)  # height servers (Qfs.jl/Server.jl)
     db: str = "runs/heights.sqlite"  # every scored polynomial is saved here ("" to disable)
     parent_db_frac: float = 0.5  # fraction of parents drawn from the polynomials saved in db
     parent_min_height: int = 2  # ... that have at least this height
@@ -205,7 +205,7 @@ def main(args: Args):
 
     envs = PolyEnv(
         args.num_envs, args.p, args.n, args.d, cutoff=args.cutoff, infinite_score=args.infinite_score,
-        hamming_penalty=args.hamming_penalty, hamming_free=args.hamming_free, copy_penalty=args.copy_penalty, repeat_penalty=args.repeat_penalty, workers=args.workers, db=args.db,
+        hamming_penalty=args.hamming_penalty, hamming_free=args.hamming_free, copy_penalty=args.copy_penalty, repeat_penalty=args.repeat_penalty, urls=args.urls, db=args.db,
         parent_db_frac=args.parent_db_frac, parent_min_height=args.parent_min_height,
         parent_db_min_size=args.parent_db_min_size, parent_temperature=args.parent_temperature,
         parent_max_height=args.curriculum_start or None, children_per_parent=args.children_per_parent, seed=args.seed,
@@ -224,7 +224,7 @@ def main(args: Args):
         raise ValueError("--kl-coef needs --init")
     optimizer = torch.optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
     num_iterations = args.total_timesteps // args.num_envs
-    log.info("writing to %s; device %s; %d Julia workers", out, device, envs.oracle.n_workers)
+    log.info("writing to %s; device %s; %d height servers", out, device, len(args.urls))
 
     def save():
         torch.save({"args": asdict(args), "model": agent.state_dict()}, out / "model.pt")

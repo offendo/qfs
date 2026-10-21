@@ -38,11 +38,11 @@ def main():
     ap.add_argument("--ceilings", type=int, nargs="+", default=[2, 4, 6, 8])
     ap.add_argument("--ckpt", action="append", default=[], help="name=path")
     ap.add_argument("--batches", type=int, default=40)
-    ap.add_argument("--workers", type=int, default=20)
+    ap.add_argument("--urls", nargs="+", default=["http://127.0.0.1:8080"])
     args = ap.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    env = PolyEnv(1024, args.p, workers=args.workers, db=args.db, parent_db_frac=1.0, parent_temperature=3.0)
+    env = PolyEnv(1024, args.p, urls=tuple(args.urls), db=args.db, parent_db_frac=1.0, parent_temperature=3.0)
     env._remember = lambda coeffs, scores: None
     rng = np.random.default_rng(0)
     for ceiling in args.ceilings:

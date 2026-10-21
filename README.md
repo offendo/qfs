@@ -1,35 +1,32 @@
 # rlmath
 
 Learning-guided search for polynomials of high quasi-F-split height. See `PLAN.md` for the
-methodology and `PROOF_fast_height.md` for why the height code's fast step is correct.
+methodology and `PROOF_fast_height.md` for why the height step is correct.
 
 ## Setup
 
-You need Julia (1.11 tested) and [uv](https://docs.astral.sh/uv/).
+You need Julia and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-julia --project=julia -e 'using Pkg; Pkg.instantiate()'
-```
-
-```bash
+git submodule update --init Qfs.jl
+julia --project=Qfs.jl -e 'using Pkg; Pkg.instantiate()'
 uv sync
-```
-
-Check everything works. This runs the Julia height tests and the Python tests, which start a few
-Julia workers:
-
-```bash
-julia --project=Qfs.jl -e 'using Pkg; Pkg.test()'
-```
-
-```bash
-uv run pytest
+uv run pytest    # starts its own height servers on ports 8080 and 8081
 ```
 
 ## Running
 
+Heights come from HTTP servers written in Julia (`Qfs.jl/Server.jl`). Start N of them, on ports
+8080 to 8080+N-1, in a separate terminal:
+
 ```bash
-uv run rlmath-reinforce --p 5 --total-timesteps 1000000 --track
+Qfs.jl/serve.sh 8
+```
+
+Then train, listing the servers:
+
+```bash
+uv run rlmath-reinforce --p 5 --total-timesteps 1000000 --urls http://127.0.0.1:8080 http://127.0.0.1:8081 --track
 ```
 
 `--track` logs to Weights and Biases (run `wandb login` first, or set `WANDB_MODE=offline`). Without
@@ -63,39 +60,28 @@ Each run writes its model to `runs/<name>/model.pt`.
   whether a policy uses its input. The results of the overnight batch are in `experiments-notes.md` (summary) and
   `experiments/LOG.md` (every experiment), with the key checkpoints in `experiments/checkpoints/`.
 
-## Debugging the height worker
+## Checking the height server
 
-The worker is an ordinary Julia script, so it can be run by hand. First check that the Julia
-environment installs and loads (this shows the real error if a package is missing):
-
-```bash
-julia --project=julia -e 'using Pkg; Pkg.instantiate(); using Qfs, Nemo, Singular; println("ok")'
-```
-
-Then talk to the worker directly. It prints `READY` once loaded, then one reply per request line.
-The polynomial here is the Fermat quartic `w⁴ + x⁴ + y⁴ + z⁴`, which should give `ok 1` at
-p = 5, `inf` at p = 3, and `1` (smooth) for the last line:
+Start a server and ask for the Fermat quartic `w⁴ + x⁴ + y⁴ + z⁴` (a polynomial is one line of 35
+coefficients). The height is `ok 1` at p = 5 and `inf` at p = 3, and the smoothness is `1`:
 
 ```bash
-printf 'H 5 4 4 10 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 1 0 0 0 1\nH 3 4 4 10 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 1 0 0 0 1\nS 5 4 4 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 1 0 0 0 1\n' | julia --project=julia julia/height_worker.jl
+julia --project=Qfs.jl Qfs.jl/Server.jl 8080 &
+F="1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 1 0 0 0 1"
+echo "$F" | curl -s --data-binary @- "localhost:8080/height?p=5&n=4&d=4&cutoff=10"
+echo "$F" | curl -s --data-binary @- "localhost:8080/smooth?p=5&n=4&d=4"
 ```
-
-Python starts workers with plain `julia` from the `PATH`. If Julia lives somewhere else, put it on
-the `PATH` before running.
 
 ## How the pieces fit
 
 | Piece | File | What it does |
 |---|---|---|
-| Height code | `Qfs.jl/src/Qfs.jl` | The quasi-F-split height algorithm (fast version), on Nemo |
-| Height worker | `julia/height_worker.jl` | Standalone Julia process: reads polynomials on stdin, writes heights or smoothness on stdout |
-| Oracle client | `src/rlmath/oracle.py` | Runs one worker per CPU core, sends batches, caches results, counts oracle calls |
+| Height code | `Qfs.jl/src/Qfs.jl` | Quasi-F-split height, on Nemo |
+| Height server | `Qfs.jl/Server.jl` | HTTP endpoints `/height`, `/smooth`, `/monomials` |
+| Oracle client | `src/rlmath/oracle.py` | Sends batches to the servers, caches results, counts oracle calls |
 | Polynomials | `src/rlmath/polynomials.py` | Coefficient vectors and the monomial order |
 | Environment | `src/rlmath/env.py` | Gymnasium vector env: parent in, child out, reward `score(child) - score(parent)` |
-| Agent and training | `src/rlmath/reinforce.py` | Transformer policy and a REINFORCE loop, laid out like a CleanRL script |
-
-Julia never runs inside Python. Each worker is its own process, which removes the "bus error"
-class of crashes, and a worker that dies is restarted.
+| Agent and training | `src/rlmath/reinforce.py` | Transformer policy and a REINFORCE loop |
 
 ## Design
 

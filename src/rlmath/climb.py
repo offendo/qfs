@@ -197,7 +197,7 @@ def main(args: Args):
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
     envs = ClimbEnv(
-        args.num_envs, args.p, args.n, args.d, cutoff=args.cutoff, infinite_score=args.infinite_score, workers=args.workers,
+        args.num_envs, args.p, args.n, args.d, cutoff=args.cutoff, infinite_score=args.infinite_score, urls=args.urls,
         db=args.db, parent_db_frac=args.parent_db_frac, parent_min_height=args.parent_min_height,
         parent_db_min_size=args.parent_db_min_size, parent_temperature=args.parent_temperature,
         parent_max_height=args.curriculum_start or None, children_per_parent=args.children_per_parent, seed=args.seed,
@@ -215,7 +215,7 @@ def main(args: Args):
     optimizer = torch.optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
     per_iteration = args.num_envs * args.steps  # oracle calls
     num_iterations = args.total_timesteps // per_iteration
-    log.info("writing to %s; device %s; %d Julia workers; %d iterations", out, device, envs.oracle.n_workers, num_iterations)
+    log.info("writing to %s; device %s; %d height servers; %d iterations", out, device, len(args.urls), num_iterations)
 
     progress = {"iteration": 0, "elapsed": 0.0, "ceiling": args.curriculum_start}
 

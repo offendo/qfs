@@ -23,7 +23,7 @@ def test_agent_shapes_and_logprob():
 
 def test_short_run(tmp_path):
     args = Args(
-        p=3, total_timesteps=512, num_envs=128, workers=2, cuda=False, out=str(tmp_path),
+        p=3, total_timesteps=512, num_envs=128, cuda=False, out=str(tmp_path),
         db=str(tmp_path / "heights.sqlite"), d_model=32, n_layers=2, n_heads=4, d_ff=64,
     )
     main(args)
@@ -80,7 +80,7 @@ def test_curriculum_raises_the_ceiling_after_a_good_window():
 
 def test_short_run_with_groups_and_curriculum(tmp_path):
     args = Args(
-        p=3, total_timesteps=512, num_envs=64, children_per_parent=8, workers=2, cuda=False, out=str(tmp_path),
+        p=3, total_timesteps=512, num_envs=64, children_per_parent=8, cuda=False, out=str(tmp_path),
         db=str(tmp_path / "heights.sqlite"), parent_db_frac=1.0, parent_db_min_size=10, curriculum_start=2,
         curriculum_window=2, curriculum_threshold=0.0, d_model=32, n_layers=2, n_heads=4, d_ff=64,
     )
@@ -90,7 +90,7 @@ def test_short_run_with_groups_and_curriculum(tmp_path):
 
 def test_init_and_kl_penalty(tmp_path):
     base = Args(
-        p=3, total_timesteps=256, num_envs=64, children_per_parent=8, workers=2, cuda=False,
+        p=3, total_timesteps=256, num_envs=64, children_per_parent=8, cuda=False,
         db=str(tmp_path / "heights.sqlite"), d_model=32, n_layers=2, n_heads=4, d_ff=64,
     )
     main(Args(**{**base.__dict__, "out": str(tmp_path / "a")}))
@@ -117,7 +117,7 @@ def test_single_edit_policy_changes_exactly_one_coefficient():
 
 def test_single_edit_run_with_init(tmp_path):
     base = Args(
-        p=3, total_timesteps=256, num_envs=64, children_per_parent=8, workers=2, cuda=False, single=True,
+        p=3, total_timesteps=256, num_envs=64, children_per_parent=8, cuda=False, single=True,
         db=str(tmp_path / "heights.sqlite"), d_model=32, n_layers=2, n_heads=4, d_ff=64,
     )
     main(Args(**{**base.__dict__, "out": str(tmp_path / "a")}))

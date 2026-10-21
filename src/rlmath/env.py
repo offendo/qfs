@@ -110,7 +110,7 @@ class PolyEnv(gym.vector.VectorEnv):
         hamming_free: int = 0,  # number of coefficients the child may change without penalty
         copy_penalty: float = 0.0,  # reward lost when the child is exactly the parent
         repeat_penalty: float = 0.0,  # reward of a child already seen this run is -repeat_penalty (0 = no change)
-        workers: int = 0,  # Julia worker processes (0 = number of CPUs - 1)
+        urls: tuple[str, ...] = ("http://127.0.0.1:8080",),  # height servers (Qfs.jl/Server.jl)
         db: str = "",  # SQLite file every scored polynomial is saved to, and parents are read from
         parent_db_frac: float = 0.0,  # fraction of parents drawn from the pool, once it is big enough
         parent_min_height: int = 2,  # a polynomial needs at least this score to enter the pool
@@ -139,7 +139,7 @@ class PolyEnv(gym.vector.VectorEnv):
         self.action_space = batch_space(self.single_action_space, num_envs)
 
         self.rng = np.random.default_rng(seed)
-        self.oracle = HeightOracle(p, n, d, cutoff, workers=workers or None, db=db or None)
+        self.oracle = HeightOracle(p, n, d, cutoff, urls=list(urls), db=db or None)
         self.parent_db_frac, self.parent_min_height = parent_db_frac, parent_min_height
         self.parent_db_min_size = max(1, parent_db_min_size)
         if parent_temperature <= 0:

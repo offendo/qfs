@@ -3,8 +3,8 @@
 Status: implemented on the `fast-height` branch (October 2026); see `README.md` for what was built.
 The PatternBoost search loop described in section 5 was later replaced by a Gymnasium environment and
 a CleanRL-style REINFORCE agent (`src/rlmath/env.py`, `src/rlmath/reinforce.py`); sections 5 to 7 are kept as history.
-Where the code differs from this plan: the Julia workers talk over stdin/stdout instead of ZMQ
-(no ports or extra packages), and supersingular polynomials are not rewarded by default, because
+Where the code differs from this plan: heights come from HTTP servers (`Qfs.jl/Server.jl`) instead of ZMQ
+workers, and supersingular polynomials are not rewarded by default, because
 at p = 5 sparse supersingular quartics turned out to be easy to find and flooded the search.
 
 ## 1. The problem in plain terms

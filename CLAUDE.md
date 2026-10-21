@@ -22,8 +22,8 @@ Python (uv) and Julia (1.11) are both required.
 
 ```bash
 uv sync
-julia --project=julia -e 'using Pkg; Pkg.instantiate()'
-uv run pytest                                   # starts real Julia workers; ~3 minutes
+julia --project=Qfs.jl -e 'using Pkg; Pkg.instantiate()'
+uv run pytest                                   # starts Julia servers; ~1 minute
 uv run pytest tests/test_env.py::test_name      # single test
 uv run rlmath-reinforce --p 3 --total-timesteps 1500000 [--track]   # REINFORCE; --help lists every option
 uv run python experiments/count_pairs.py <heights.sqlite> 3 pairs_p3.npz        # mine (parent, one-edit child) pairs
@@ -33,27 +33,21 @@ uv run python experiments/run_rl.py <name> <snapshot.sqlite> <out_dir> [args]   
 uv run python experiments/evaluate.py --help    # common-parent comparison against random edits
 ```
 
-There is no linter/formatter config. The README mentions `julia --project=Qfs.jl -e 'using Pkg; Pkg.test()'`,
-but `Qfs.jl/` has no `test/` directory, so there are currently no Julia tests.
+There is no linter/formatter config and no Julia tests.
 
 ## Architecture
 
-- **Julia never runs inside Python.** `src/rlmath/oracle.py` spawns Julia worker processes
-  (`julia/height_worker.jl`) and talks to them with a line protocol over stdin/stdout (`MONOS`, `H`, `S`
-  requests; see the header of the worker). Dead workers are restarted. Nothing else may print to the
-  worker's stdout. The old juliacall/ZMQ bridge was removed (it caused "bus error" crashes).
-- **Monomial order is a cross-language contract.** `rlmath.polynomials.monomials` must match the
-  worker's `monomials` (descending lex); the oracle checks this at startup. Change both together.
-- **Height algorithm** lives in the `Qfs.jl` git submodule (`Qfs.jl/src/Qfs.jl`, Nemo/Singular). The
-  `julia/` project points at it via `[sources]`. It is a separate repo (`offendo/Qfs.jl`), so changes
-  there are committed and pushed in the submodule, then the pointer is bumped here.
-  The pinned commit's `quasiFSplitHeight_CY_lift` still uses the original slow step
-  (`Δ₁l(p, f^(p-1))`, despite the README calling it the fast version). The faster step
-  `θ(g) = -f^(p-2)·u(Δ(f)·g)` exists as a prototype in the `PLAN.md` appendix, and
-  `PROOF_fast_height.md` proves it equivalent; keep that argument intact if you change the chain step.
-  In a fresh clone or worktree run `git submodule update --init Qfs.jl` first.
+- **Julia runs as HTTP servers.** `Qfs.jl/Server.jl` serves `/height`, `/smooth` and `/monomials`; start
+  N with `Qfs.jl/serve.sh N` (ports 8080..). `src/rlmath/oracle.py` only formats batches, POSTs them
+  to the servers in `--urls`, and caches. `uv run pytest` starts its own servers on 8080 and 8081.
+- **Monomial order is a cross-language contract.** `rlmath.polynomials.monomials` must match
+  `monomials` in `Server.jl` (descending lex); the oracle checks this at startup. Change both together.
+- **Height algorithm** is `Qfs.height` in the `Qfs.jl` git submodule (`offendo/Qfs.jl`, branch `server`).
+  It uses the fast step `θ(g) = -f^(p-2)·u(Δ(f)·g)`; `PROOF_fast_height.md` proves it equivalent to the
+  original, so keep that argument intact if you change the chain step. Commit and push changes in the
+  submodule, then bump the pointer here. In a fresh clone or worktree run `git submodule update --init Qfs.jl`.
 - **Scoring (`env.py`, `score`):** score = height; anything scoring >= 2 must pass the smoothness check
-  (`S` request) or it scores 0. Infinite height scores 1 by default (`--infinite-score` to change),
+  (`/smooth`) or it scores 0. Infinite height scores 1 by default (`--infinite-score` to change),
   because sparse supersingular quartics flood the search otherwise.
 - **Environment (`env.py`):** `PolyEnv` is a Gymnasium `VectorEnv` of one-step episodes. Observation = parent,
   action = child, reward = `score(child) - score(parent)` minus optional penalties (Hamming beyond a free
@@ -82,9 +76,8 @@ but `Qfs.jl/` has no `test/` directory, so there are currently no Julia tests.
   is reading. Delete the `-wal`/`-shm` files together with a database you replace.
 - Check an evaluation's exact-copy handling before trusting a "retention" number (an earlier result was an
   artifact of this; see the erratum in `experiments/LOG.md`).
-- When debugging the worker, run it by hand (README section "Debugging the height worker" has a
-  known-answer input: Fermat quartic gives `ok 1` at p=5, `inf` at p=3).
-- Tests share Julia workers via the session-scoped `oracle_factory` fixture in `tests/conftest.py`;
-  reuse it instead of constructing `HeightOracle` per test (workers take seconds to start).
+- To debug the server, run it by hand (README section "Checking the height server" has a known-answer
+  input: Fermat quartic gives `ok 1` at p=5, `inf` at p=3). Tests share one pair of servers through
+  the `oracle_factory` fixture in `tests/conftest.py`; reuse it.
 - `.python-version` and the `.venv` are uv-managed; the `MMPSingularities.jl` entry in `.gitmodules`
   has no checked-out directory and isn't used.
