@@ -75,6 +75,7 @@ Improvement (higher is better); all numbers from evaluations F and G (`experimen
 | E22 | group hit rate, 128 children per parent | per child the trained models are 1.6x random; per parent `q2` is worse than random flips (diversity narrowed by RL) |
 | E23 | hill-climb (accept if not lower) vs best-of-k, no training | chaining adds nothing for random proposals; the SFT prior gives +27-32% relative |
 | E24 | free-walk game (always move, reward max(0, h - parent), repeat penalty), RL K = 4 / 8 / 16 | RL does not beat its SFT start; free walk beats independent tries for the SFT prior, loses for random |
+| E25 | no-replacement mask on the existing models, no training | **best no-training rule so far**: SFT best-of-16 without repeats beats every RL free-walk model by 0.12-0.16 at ceilings 2-4; `q2` was only hurt by repeats |
 | E20 | repeat penalty (seen set from scratch, no Hamming penalty, copy 100) | stops collapse; no learning from scratch (new>=6: 2.5 -> 2.8 per 1024); SFT start gives 3x but RL adds nothing |
 
 ## What I learned

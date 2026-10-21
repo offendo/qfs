@@ -783,3 +783,48 @@ parent) gain after 16:
 - **What does help:** the supervised single-edit prior itself (+25-30% relative over random) and not repeating. What does not: RL
   (this game, E15's recipe), longer trajectories (16 steps vs 8 vs 4: no clear difference), bigger edits (E21).
 - Not done: the decoder-only model that sees its own history of edits and heights; a no-replacement baseline for the SFT model.
+
+
+---
+
+## E25. No-replacement baseline: remembering what was already tried (no training)
+
+**Why.** The group hit rate (E22) showed the RL-trained models lose to random flips per parent because they repeat flips. The user asked
+for the cheap baseline from the decoder discussion: take the existing models and forbid them from proposing a polynomial already in the
+trajectory. **What.** `rlmath.climb.no_replacement_proposer`: the same model, but before sampling, every one of the 105 single changes
+whose polynomial (up to scaling) already occurred in the trajectory (parent, earlier children, the polynomial it stands on) is masked
+out. `experiments/climb_eval.py --no-replacement`; the E24 protocol (256 parents x 32 trajectories, 16 oracle calls, the same parents; raw
+numbers `experiments/results/climbC.json`). The plain rows reproduce E24 within sampling noise (e.g. SFT free walk @16, ceiling 2:
++2.012 vs +2.036). "Best of k" = k independent single flips of the parent; "free walk" = the trajectory moves to each child.
+
+Gain after 16 oracle calls (best height reached - parent), without -> with the no-replacement mask:
+
+| ceiling | rule | best of 16 independent flips | free walk |
+|---|---|---|---|
+| 2 | random | +1.69 -> +1.78 | +1.15 -> +1.12 |
+| 2 | old SFT | +1.85 -> **+2.19** | +2.01 -> +2.07 |
+| 2 | `q2` | +1.52 -> **+2.19** | +1.80 -> +1.88 |
+| 4 | random | +0.81 -> +0.87 | +0.50 -> +0.50 |
+| 4 | old SFT | +0.93 -> **+1.18** | +1.00 -> +1.05 |
+| 4 | `q2` | +0.55 -> **+1.04** | +0.85 -> +0.88 |
+| 6 | random | +0.37 -> +0.39 | +0.21 -> +0.22 |
+| 6 | old SFT | +0.39 -> **+0.49** | +0.45 -> +0.48 |
+| 6 | `q2` | +0.36 -> **+0.51** | +0.37 -> +0.39 |
+| 8 | random | +0.16 -> +0.18 | +0.09 -> +0.10 |
+| 8 | old SFT | +0.19 -> **+0.26** | +0.19 -> +0.21 |
+| 8 | `q2` | +0.13 -> **+0.24** | +0.14 -> +0.16 |
+
+Share of parents for which some trajectory improved (best of 16): old SFT 99.6/84.4/42.6/19.9% -> 100/85.9/42.2/21.5%;
+`q2` 88.7/46.1/24.2/8.6% -> 100/80.1/39.1/18.8%.
+
+**Result and takeaways.**
+- **Not repeating is worth a lot for the learned models and nothing for random flips** (random repeats are rare). `q2` goes from the
+  worst learned model to level with the SFT model: it looked worse than the SFT model it came from in E22-E24, but that was repeated
+  proposals, not a worse prior. The old SFT model gains +0.07 to +0.34.
+- **The best "no training" rule is best-of-16 independent flips with the no-replacement mask** (SFT +2.19 / +1.18 / +0.49 / +0.26 at ceilings
+  2 / 4 / 6 / 8; `q2` equal within noise at 2 and 6). It beats every RL-trained free-walk model of E24 (`d1`-`d3`: +2.03-2.06 / +1.04-1.06 /
+  +0.44-0.46 / +0.21 at 16 calls) by 0.12-0.16 at ceilings 2-4. This is the bar a history-aware policy has to clear.
+- Staying at the parent (best-of) is better than the free walk once repeats are removed (ceiling 2: +2.19 vs +2.07; ceiling 4:
+  +1.18 vs +1.05), the opposite of the E24 result with repeats, where the walk helped because it avoided them.
+- Caveat: one batch of 256 parents per cell (noise about 0.03-0.05); the mask is exact for single flips of a fixed parent and approximate
+  for the walk (it also forbids stepping back).
